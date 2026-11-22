@@ -38,6 +38,8 @@ def make_settings(tmp_path: Path, **overrides: Any) -> Settings:
         "argon2_time_cost": 1,
         "argon2_memory_cost_kib": 1024,
         "argon2_parallelism": 1,
+        # Las embeddings simuladas (bolsa de palabras) puntúan más bajo que las reales.
+        "rag_min_score": 0.2,
         "log_json": False,
         "log_level": "WARNING",
         "llm_provider": "fake",

@@ -41,3 +41,26 @@ async def test_live_ollama_chat_stream() -> None:
         assert chunks[-1].usage.completion_tokens > 0
     finally:
         await provider.aclose()
+
+
+@pytest.mark.anyio
+async def test_live_embeddings_rank_related_text_higher() -> None:
+    from app.llm.embeddings import EmbeddingService
+
+    provider = OllamaProvider(os.environ.get("MILT_OLLAMA_BASE_URL", "http://127.0.0.1:11434"))
+    embed_model = os.environ.get("MILT_TEST_EMBED_MODEL", "nomic-embed-text")
+    try:
+        service = EmbeddingService(provider, model=embed_model)
+        docs = await service.embed_documents(
+            ["El servidor escucha en el puerto 8443.", "Mi gato se llama Michi."]
+        )
+        query = await service.embed_query("¿Qué puerto usa el servidor?")
+
+        def cosine(a: list[float], b: list[float]) -> float:
+            dot = sum(x * y for x, y in zip(a, b, strict=True))
+            return dot / ((sum(x * x for x in a) ** 0.5) * (sum(y * y for y in b) ** 0.5))
+
+        assert len(query) == len(docs[0]) > 100
+        assert cosine(query, docs[0]) > cosine(query, docs[1])
+    finally:
+        await provider.aclose()

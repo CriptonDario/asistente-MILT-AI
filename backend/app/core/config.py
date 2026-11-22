@@ -81,6 +81,21 @@ class Settings(BaseSettings):
     chat_max_input_chars: int = Field(default=32_000, ge=1)
     chat_max_turns_per_user: int = Field(default=2, ge=1)
 
+    # --- Memoria y documentos (RAG) ---------------------------------------------
+    #: Qdrant en servidor (perfil server). Si no se define, se usa el modo embebido.
+    vector_url: str | None = None
+    embedding_model: str = "nomic-embed-text"
+    embedding_batch_size: int = Field(default=16, ge=1, le=256)
+    max_upload_bytes: int = Field(default=25 * 1024 * 1024, ge=1024)
+    max_document_chunks: int = Field(default=2000, ge=1)
+    chunk_chars: int = Field(default=2000, ge=200)
+    chunk_overlap_chars: int = Field(default=250, ge=0)
+    rag_top_k: int = Field(default=4, ge=1, le=20)
+    rag_min_score: float = Field(default=0.4, ge=0.0, le=1.0)
+    memory_top_k: int = Field(default=5, ge=1, le=20)
+    # Calibrado con nomic-embed-text: relevantes ~0,62-0,67; irrelevantes ~0,48-0,58.
+    memory_min_score: float = Field(default=0.6, ge=0.0, le=1.0)
+
     @model_validator(mode="after")
     def _validate_profile(self) -> Settings:
         if self.profile == "server":
@@ -98,6 +113,14 @@ class Settings(BaseSettings):
         if self.database_url:
             return self.database_url
         return f"sqlite+aiosqlite:///{(self.data_dir / 'milt.db').as_posix()}"
+
+    @property
+    def vector_path(self) -> Path:
+        return self.data_dir / "vectors"
+
+    @property
+    def uploads_dir(self) -> Path:
+        return self.data_dir / "uploads"
 
     @property
     def is_sqlite(self) -> bool:

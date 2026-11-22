@@ -43,3 +43,5 @@ class Message(UUIDPrimaryKeyMixin, TimestampMixin, SyncMixin, Base):
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="complete", nullable=False)
+    #: Fuentes usadas para la respuesta (recuerdos y fragmentos de documentos citados).
+    context_sources: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONType, nullable=True)

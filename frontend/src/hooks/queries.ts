@@ -3,6 +3,8 @@ import { queryClient, queryKeys } from "../app/queryClient";
 import {
   authApi,
   conversationsApi,
+  documentsApi,
+  memoriesApi,
   modelsApi,
   settingsApi,
   systemApi,
@@ -108,5 +110,68 @@ export function useUpdateSettings() {
   return useMutation({
     mutationFn: (body: SettingsUpdate) => settingsApi.update(body),
     onSuccess: (settings) => queryClient.setQueryData(queryKeys.settings, settings),
+  });
+}
+
+// ------------------------------------------------------------------ memoria
+export function useMemories(q: string) {
+  return useQuery({
+    queryKey: [...queryKeys.memories, { q }],
+    queryFn: () => memoriesApi.list({ q: q || undefined }),
+  });
+}
+
+export function useMemorySuggestions() {
+  return useQuery({ queryKey: queryKeys.memorySuggestions, queryFn: memoriesApi.suggestions });
+}
+
+export function useMemoryStats() {
+  return useQuery({ queryKey: queryKeys.memoryStats, queryFn: memoriesApi.stats });
+}
+
+export function invalidateMemory() {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.memories });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.memorySuggestions });
+  void queryClient.invalidateQueries({ queryKey: queryKeys.memoryStats });
+}
+
+export function useExtractMemories() {
+  return useMutation({
+    mutationFn: (conversationId: string) => memoriesApi.extract(conversationId),
+    onSuccess: invalidateMemory,
+  });
+}
+
+// ------------------------------------------------------------------ documentos
+const PROCESSING = new Set(["pending", "processing"]);
+
+export function useDocuments() {
+  return useQuery({
+    queryKey: queryKeys.documents,
+    queryFn: documentsApi.list,
+    // Mientras haya documentos procesándose, se consulta su estado cada 2 s.
+    refetchInterval: (query) =>
+      query.state.data?.some((d) => PROCESSING.has(d.status)) ? 2000 : false,
+  });
+}
+
+export function useUploadDocument() {
+  return useMutation({
+    mutationFn: (file: File) => documentsApi.upload(file),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.documents }),
+  });
+}
+
+export function useDeleteDocument() {
+  return useMutation({
+    mutationFn: (id: string) => documentsApi.remove(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.documents }),
+  });
+}
+
+export function useReindexDocument() {
+  return useMutation({
+    mutationFn: (id: string) => documentsApi.reindex(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.documents }),
   });
 }

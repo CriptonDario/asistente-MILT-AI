@@ -7,7 +7,7 @@ import contextlib
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
@@ -25,10 +25,13 @@ from app.llm.base import (
     ToolCallRequest,
     Usage,
 )
+from app.modules.chat.augment import gather_context
 from app.modules.chat.context_builder import build_context, output_reserve
 from app.modules.conversations import repository as conv_repo
 from app.modules.conversations.models import Message
 from app.modules.conversations.service import title_from_text
+from app.modules.documents.models import MessageAttachment
+from app.modules.documents.service import DocumentService
 from app.modules.settings.models import UserSettings
 from app.modules.settings.service import base_generation_params
 
@@ -49,6 +52,8 @@ class TurnRequest:
     model: str | None = None
     params: GenerationParams | None = None
     regenerate: bool = False
+    attachments: tuple[uuid.UUID, ...] = ()
+    use_memory: bool = True
 
 
 @dataclass(frozen=True)
@@ -59,6 +64,8 @@ class PreparedTurn:
     user_message_id: uuid.UUID
     dropped_messages: int
     replaces_message_id: uuid.UUID | None = None
+    sources: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 class ChatService:
@@ -85,6 +92,12 @@ class ChatService:
 
     # ------------------------------------------------------------------ preparación
     async def _prepare(self, req: TurnRequest) -> PreparedTurn:
+        """Tres fases: lectura/validación, recuperación de contexto y escritura.
+
+        La recuperación (embeddings en Ollama) se hace sin transacción abierta para no
+        bloquear la escritura en SQLite mientras tanto.
+        """
+        # --- 1. Lectura y validación (nada se escribe todavía) -----------------------
         async with self.state.sessionmaker() as db:
             conv = await conv_repo.get_conversation(db, req.user_id, req.conversation_id)
             if conv is None:
@@ -93,16 +106,16 @@ class ChatService:
 
             model = req.model or conv.model or (prefs.default_model if prefs else None)
             model = model or self.settings.default_model
-            # Se valida el modelo ANTES de escribir nada: un modelo inexistente o el motor
-            # apagado no deben dejar la conversación en un estado inconsistente.
+            # Un modelo inexistente o el motor apagado no deben dejar la conversación en un
+            # estado inconsistente: se valida antes de escribir.
             await self.state.llm.get().get_model(model)
             base = base_generation_params(self.settings, prefs)
             if conv.params:
                 base = GenerationParams(**conv.params).merged_over(base)
             params = (req.params or GenerationParams()).merged_over(base)
 
-            hlc = self.state.hlc.now()
             replaces_message_id: uuid.UUID | None = None
+            regenerate_user_id: uuid.UUID | None = None
             if req.regenerate:
                 recent = await conv_repo.recent_messages(db, conv.id, limit=2)
                 if recent and recent[-1].role == "assistant":
@@ -111,26 +124,71 @@ class ChatService:
                     recent = recent[:-1]
                 if not recent or recent[-1].role != "user":
                     raise ValidationAppError("No hay ningún mensaje del usuario que regenerar.")
-                user_message_id = recent[-1].id
+                regenerate_user_id = recent[-1].id
+                query = recent[-1].content
             else:
-                content = (req.content or "").strip()
-                if not content:
+                query = (req.content or "").strip()
+                if not query:
                     raise ValidationAppError("El mensaje está vacío.")
-                if len(content) > self.settings.chat_max_input_chars:
+                if len(query) > self.settings.chat_max_input_chars:
                     raise ValidationAppError(
                         f"El mensaje supera {self.settings.chat_max_input_chars} caracteres."
                     )
+
+            new_attachments = list(dict.fromkeys(req.attachments))
+            if new_attachments:
+                ready = await DocumentService(db, self.state).ready_ids(
+                    req.user_id, new_attachments
+                )
+                if len(ready) != len(new_attachments):
+                    raise ValidationAppError(
+                        "Algún documento adjunto no existe o todavía se está procesando."
+                    )
+            scope = list(
+                dict.fromkeys(
+                    [*await conv_repo.conversation_document_ids(db, conv.id), *new_attachments]
+                )
+            )
+            use_memory = req.use_memory and (prefs.memory_enabled if prefs else True)
+
+        # --- 2. Recuperación de contexto (memoria + documentos) -----------------------
+        num_ctx = params.num_ctx or self.settings.default_num_ctx
+        augmentation = await gather_context(
+            self.state,
+            req.user_id,
+            query,
+            use_memory=use_memory,
+            document_ids=scope,
+            num_ctx=num_ctx,
+        )
+        system_prompt = build_system_prompt(conv.agent_profile, user_name=req.user_name)
+        if augmentation.system_addendum:
+            system_prompt = f"{system_prompt}\n\n{augmentation.system_addendum}"
+
+        # --- 3. Escritura -------------------------------------------------------------
+        async with self.state.sessionmaker() as db:
+            conv = await conv_repo.get_conversation(db, req.user_id, req.conversation_id)
+            if conv is None:
+                raise NotFoundError("Conversación no encontrada.")
+            hlc = self.state.hlc.now()
+            if regenerate_user_id is not None:
+                user_message_id = regenerate_user_id
+            else:
                 user_message = Message(
                     id=uuid7(),
                     conversation_id=conv.id,
                     role="user",
-                    content=content,
+                    content=query,
                     updated_hlc=hlc,
                 )
                 db.add(user_message)
                 user_message_id = user_message.id
+                db.add_all(
+                    MessageAttachment(message_id=user_message.id, document_id=doc_id)
+                    for doc_id in new_attachments
+                )
                 if conv.title is None:
-                    conv.title = title_from_text(content)
+                    conv.title = title_from_text(query)
 
             # El modelo de la petición es puntual: el de la conversación solo cambia con PATCH.
             conv.touch(hlc)
@@ -144,10 +202,9 @@ class ChatService:
                 and m.content
                 and m.id != replaces_message_id
             ]
-            num_ctx = params.num_ctx or self.settings.default_num_ctx
             # Si el mensaje no cabe, se lanza aquí y no se guarda nada (rollback al salir).
             context = build_context(
-                build_system_prompt(conv.agent_profile, user_name=req.user_name),
+                system_prompt,
                 history,
                 num_ctx=num_ctx,
                 reserve_output=output_reserve(num_ctx, params.max_tokens),
@@ -161,6 +218,8 @@ class ChatService:
             user_message_id=user_message_id,
             dropped_messages=context.dropped,
             replaces_message_id=replaces_message_id,
+            sources=augmentation.sources,
+            warnings=augmentation.warnings,
         )
 
     # ------------------------------------------------------------------ generación
@@ -178,6 +237,15 @@ class ChatService:
                 "context_dropped_messages": prepared.dropped_messages,
             }
         )
+        if prepared.sources or prepared.warnings:
+            await emit(
+                {
+                    "type": "chat.context",
+                    "request_id": req.request_id,
+                    "sources": prepared.sources,
+                    "warnings": prepared.warnings,
+                }
+            )
 
         parts: list[str] = []
         usage = Usage()
@@ -284,6 +352,7 @@ class ChatService:
                         completion_tokens=usage.completion_tokens or None,
                         latency_ms=latency_ms,
                         status=status,
+                        context_sources=prepared.sources or None,
                         updated_hlc=hlc,
                     )
                 )

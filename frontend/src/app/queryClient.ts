@@ -24,4 +24,8 @@ export const queryKeys = {
   settings: ["settings"] as const,
   system: ["system"] as const,
   sessions: ["sessions"] as const,
+  memories: ["memories"] as const,
+  memorySuggestions: ["memory-suggestions"] as const,
+  memoryStats: ["memory-stats"] as const,
+  documents: ["documents"] as const,
 };

@@ -28,6 +28,9 @@ class WsPing(_Strict):
     type: Literal["ping"]
 
 
+Attachments = Annotated[list[uuid.UUID], Field(max_length=10)]
+
+
 class WsChatSend(_Strict):
     type: Literal["chat.send"]
     request_id: RequestId
@@ -35,6 +38,10 @@ class WsChatSend(_Strict):
     content: Content
     model: ModelName | None = None
     params: GenerationParams | None = None
+    #: Documentos (ya procesados) que se adjuntan a este mensaje.
+    attachments: Attachments = []
+    #: Consultar la memoria del usuario en este turno.
+    use_memory: bool = True
 
 
 class WsChatRegenerate(_Strict):
@@ -66,6 +73,8 @@ class ChatCompletionRequest(_Strict):
     regenerate: bool = False
     model: ModelName | None = None
     params: GenerationParams | None = None
+    attachments: Attachments = []
+    use_memory: bool = True
 
     @model_validator(mode="after")
     def _content_or_regenerate(self) -> ChatCompletionRequest:

@@ -19,6 +19,8 @@ class SettingsOut(BaseModel):
     default_model: str | None
     effective_default_model: str
     generation_defaults: GenerationParams
+    memory_enabled: bool
+    embedding_model: str
 
 
 class SettingsUpdate(BaseModel):
@@ -28,3 +30,4 @@ class SettingsUpdate(BaseModel):
     language: str | None = Field(default=None, pattern=r"^[a-z]{2}(-[A-Z]{2})?$")
     default_model: str | None = Field(default=None, pattern=MODEL_NAME_PATTERN)
     generation_defaults: GenerationParams | None = None
+    memory_enabled: bool | None = None

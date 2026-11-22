@@ -16,6 +16,11 @@ dependencies = [
     "argon2-cffi>=23.1",
     "pyjwt>=2.8,<3",
     "structlog>=24.1",
+    "qdrant-client>=1.10",
+    "pypdf>=4",
+    "python-docx>=1.1",
+    "openpyxl>=3.1",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +33,7 @@ dev = [
     "anyio>=4.4",
     "ruff>=0.6",
     "mypy>=1.11",
+    "types-openpyxl>=3.1.5.20261122",
 ]
 
 [tool.uv]

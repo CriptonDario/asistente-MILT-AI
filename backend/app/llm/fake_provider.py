@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import re
 from collections.abc import AsyncIterator
 from typing import Any
@@ -24,6 +25,7 @@ from app.llm.base import (
 )
 
 DEFAULT_FAKE_MODEL = "fake-model"
+FAKE_EMBED_DIM = 256
 
 
 class FakeLLMProvider:
@@ -43,6 +45,8 @@ class FakeLLMProvider:
         self.model_names = models or [DEFAULT_FAKE_MODEL]
         self.calls: list[dict[str, Any]] = []
         self.closed = False
+        self.embed_calls = 0
+        self.embed_fail_with: Exception | None = None
 
     async def health(self) -> ProviderHealth:
         return ProviderHealth(ok=True, provider=self.name, version="fake", latency_ms=0)
@@ -87,10 +91,23 @@ class FakeLLMProvider:
         )
 
     async def embed(self, texts: list[str], *, model: str) -> list[list[float]]:
+        """Bolsa de palabras con *hashing*: textos que comparten palabras quedan cerca.
+
+        Determinista y sin modelo, suficiente para probar la recuperación semántica.
+        """
+        self.embed_calls += 1
+        if self.embed_fail_with is not None:
+            raise self.embed_fail_with
         vectors = []
         for text in texts:
-            digest = hashlib.sha256(text.encode()).digest()
-            vectors.append([b / 255.0 for b in digest[:16]])
+            vector = [0.0] * FAKE_EMBED_DIM
+            for word in re.findall(r"\w{3,}", text.lower()):
+                if word in ("search_document", "search_query"):
+                    continue
+                bucket = int.from_bytes(hashlib.sha256(word.encode()).digest()[:4], "big")
+                vector[bucket % FAKE_EMBED_DIM] += 1.0
+            norm = math.sqrt(sum(v * v for v in vector)) or 1.0
+            vectors.append([v / norm for v in vector])
         return vectors
 
     async def aclose(self) -> None:

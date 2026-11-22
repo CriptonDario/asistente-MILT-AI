@@ -157,6 +157,8 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 model=message.model,
                 params=message.params,
                 regenerate=isinstance(message, WsChatRegenerate),
+                attachments=tuple(message.attachments) if isinstance(message, WsChatSend) else (),
+                use_memory=message.use_memory if isinstance(message, WsChatSend) else True,
             )
 
             def factory(turn: TurnRequest = turn) -> Any:

@@ -14,9 +14,12 @@ from app.security.passwords import PasswordService
 from app.security.tokens import TokenService
 
 if TYPE_CHECKING:
+    from app.llm.embeddings import EmbeddingService
     from app.llm.registry import ProviderRegistry
     from app.modules.audit.service import AuditService
     from app.modules.chat.turns import TurnRegistry
+    from app.modules.documents.ingestion import IngestionWorker
+    from app.vector.base import VectorStore
 
 
 @dataclass
@@ -31,5 +34,8 @@ class AppState:
     audit: AuditService
     llm: ProviderRegistry
     turns: TurnRegistry
+    vectors: VectorStore
+    embeddings: EmbeddingService
+    ingestion: IngestionWorker
     #: El token de arranque de la app de escritorio es de un solo uso por proceso.
     local_bootstrap_consumed: bool = False

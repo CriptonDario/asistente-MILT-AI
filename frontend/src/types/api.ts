@@ -23,6 +23,16 @@ export type GenerationParams = Schemas["GenerationParams"];
 export type SystemInfo = Schemas["SystemInfoOut"];
 export type SetupStatus = Schemas["SetupStatusOut"];
 export type Theme = UserSettings["theme"];
+export type Memory = Schemas["MemoryOut"];
+export type MemoryKind = Memory["kind"];
+export type MemoryCreate = Partial<Schemas["MemoryCreate"]> & { content: string };
+export type MemoryUpdate = Schemas["MemoryUpdate"];
+export type MemoryStats = Schemas["MemoryStats"];
+export type ExtractResult = Schemas["ExtractResult"];
+export type DocumentInfo = Schemas["DocumentOut"];
+export type UploadResult = Schemas["UploadResult"];
+export type ContextSource = Schemas["ContextSource"];
+export type Attachment = Schemas["AttachmentOut"];
 
 /** Cuerpo de error RFC 9457 que devuelve el backend. */
 export interface ProblemDetails {
@@ -46,6 +56,8 @@ export type ClientEvent =
       content: string;
       model?: string;
       params?: GenerationParams;
+      attachments?: string[];
+      use_memory?: boolean;
     }
   | {
       type: "chat.regenerate";
@@ -74,6 +86,12 @@ export type ServerEvent =
       user_message_id: string;
       model: string;
       context_dropped_messages: number;
+    }
+  | {
+      type: "chat.context";
+      request_id: string;
+      sources: ContextSource[];
+      warnings: string[];
     }
   | { type: "chat.delta"; request_id: string; text: string }
   | { type: "chat.thinking"; request_id: string; text: string }
