@@ -1,0 +1,50 @@
+# --- Secretos y entorno ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.spec
+
+# --- Datos locales de MILT (nunca en el repositorio) ---
+data/
+*.db
+*.db-wal
+*.db-shm
+qdrant_storage/
+uploads/
+logs/
+*.log
+
+# --- Node / Frontend ---
+node_modules/
+frontend/dist/
+.vite/
+*.tsbuildinfo
+
+# --- Tauri / Rust ---
+desktop/src-tauri/target/
+desktop/src-tauri/binaries/
+
+# --- Editor / SO ---
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+Thumbs.db
+.DS_Store
+
+# --- Claude Code (local) ---
+.claude/settings.local.json
