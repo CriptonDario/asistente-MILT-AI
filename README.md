@@ -8,7 +8,7 @@
 |------|--------|
 | 1. Arquitectura y planificación | ✅ Completada ([docs](docs/README.md)) |
 | 2. Backend | ✅ Completada ([backend/README.md](backend/README.md)) |
-| 3. Frontend | — |
+| 3. Frontend | ✅ Completada ([frontend/README.md](frontend/README.md)) |
 | 4. Memoria y RAG | — |
 | 5. Herramientas | — |
 | 6. Escritorio | — |

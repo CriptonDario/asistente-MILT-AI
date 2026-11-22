@@ -13,6 +13,7 @@ from app.llm.base import (
     ContextOverflowError,
     Done,
     GenerationParams,
+    InsufficientMemoryError,
     ModelNotFoundError,
     ProviderError,
     ProviderUnavailableError,
@@ -146,9 +147,9 @@ async def test_stream_error_and_truncated_stream() -> None:
     def error_handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/show":
             return httpx.Response(200, json=SHOW_QWEN)
-        return httpx.Response(200, content=ndjson({"error": "out of memory"}))
+        return httpx.Response(200, content=ndjson({"error": "unexpected EOF"}))
 
-    with pytest.raises(ProviderError, match="out of memory"):
+    with pytest.raises(ProviderError, match="unexpected EOF"):
         await collect(make_provider(error_handler))
 
     def truncated(request: httpx.Request) -> httpx.Response:
@@ -158,6 +159,24 @@ async def test_stream_error_and_truncated_stream() -> None:
 
     with pytest.raises(ProviderError, match="inesperada"):
         await collect(make_provider(truncated))
+
+
+@pytest.mark.anyio
+async def test_out_of_memory_is_reported_clearly() -> None:
+    oom = (
+        "llama-server reported out-of-memory during startup: "
+        "ggml_backend_cpu_buffer_type_alloc_buffer: failed to allocate buffer of size 62933024"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/show":
+            return httpx.Response(200, json=SHOW_QWEN)
+        return httpx.Response(500, json={"error": oom})
+
+    with pytest.raises(InsufficientMemoryError, match="memoria RAM suficiente") as info:
+        await collect(make_provider(handler))
+    assert info.value.code == "insufficient_memory"
+    assert info.value.status_code == 503
 
 
 @pytest.mark.anyio

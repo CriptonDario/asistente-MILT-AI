@@ -30,6 +30,12 @@ class ProviderError(AppError):
     title = "Error del motor de IA"
 
 
+class InsufficientMemoryError(ProviderError):
+    status_code = 503
+    code = "insufficient_memory"
+    title = "Memoria insuficiente para el modelo"
+
+
 class ContextOverflowError(ValidationAppError):
     code = "context_overflow"
     title = "El mensaje no cabe en el contexto del modelo"
