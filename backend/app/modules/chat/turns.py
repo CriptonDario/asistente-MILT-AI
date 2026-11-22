@@ -46,7 +46,8 @@ class TurnRegistry:
         entry = self._turns.get(request_id)
         if entry is None or entry[0] != user_id:
             return False
-        entry[1].cancel()
+        if not entry[1].cancelling():
+            entry[1].cancel()
         return True
 
     def active_count(self) -> int:
@@ -55,5 +56,6 @@ class TurnRegistry:
     async def cancel_all(self) -> None:
         tasks = [task for _, task in self._turns.values()]
         for task in tasks:
-            task.cancel()
+            if not task.cancelling():
+                task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

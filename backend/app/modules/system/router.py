@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from app import __version__
 from app.core.deps import AuthDep, DbDep, StateDep
+from app.modules.users import repository as users_repo
 
 router = APIRouter(tags=["system"])
 
@@ -49,10 +50,27 @@ class CapabilitiesOut(BaseModel):
     remote_access: bool
 
 
+class SetupStatusOut(BaseModel):
+    needs_setup: bool
+    registration_open: bool
+    profile: Literal["local", "server"]
+
+
 @router.get("/health", response_model=HealthOut)
 async def health() -> HealthOut:
     """*Liveness* público: no revela información interna."""
     return HealthOut(status="ok")
+
+
+@router.get("/system/setup", response_model=SetupStatusOut)
+async def setup_status(db: DbDep, state: StateDep) -> SetupStatusOut:
+    """Público: indica a la interfaz si debe mostrar "crear administrador" o el login."""
+    needs_setup = await users_repo.count_users(db) == 0
+    return SetupStatusOut(
+        needs_setup=needs_setup,
+        registration_open=needs_setup or state.settings.allow_registration,
+        profile=state.settings.profile,
+    )
 
 
 @router.get("/system/info", response_model=SystemInfoOut)

@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import APIRouter, status
 from fastapi.responses import StreamingResponse
 
-from app.core.deps import AuthDep, DbDep, StateDep
+from app.core.deps import AuthDep, DetachedAuthDep, StateDep
 from app.core.errors import NotFoundError
 from app.modules.chat.schemas import ChatCompletionRequest, RequestId
 from app.modules.chat.service import ChatService, TurnRequest
@@ -31,11 +31,13 @@ def format_sse(event: dict[str, Any]) -> str:
     responses={200: {"content": {"text/event-stream": {}}}},
 )
 async def chat_completions(
-    body: ChatCompletionRequest, db: DbDep, state: StateDep, auth: AuthDep
+    body: ChatCompletionRequest, state: StateDep, auth: DetachedAuthDep
 ) -> StreamingResponse:
     """Mismo contrato de eventos que el WebSocket, en formato ``text/event-stream``."""
-    # Se valida la conversación antes de abrir el stream para poder responder 404.
-    await ConversationService(db, state.hlc).get(auth.user.id, body.conversation_id)
+    # Sesiones de BD cortas (no DbDep/AuthDep): las dependencias de la petición vivirían
+    # durante todo el stream y retendrían una conexión del pool mientras el modelo genera.
+    async with state.sessionmaker() as db:
+        await ConversationService(db, state.hlc).get(auth.user.id, body.conversation_id)
 
     request_id = body.request_id or uuid.uuid4().hex
     queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()

@@ -175,6 +175,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
         sender.closed = True
         # Si el cliente se desconecta, se cancelan sus generaciones para liberar la CPU.
         for task in list(connection_tasks):
-            task.cancel()
+            if not task.cancelling():
+                task.cancel()
         if connection_tasks:
             await asyncio.gather(*connection_tasks, return_exceptions=True)

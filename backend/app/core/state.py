@@ -31,3 +31,5 @@ class AppState:
     audit: AuditService
     llm: ProviderRegistry
     turns: TurnRegistry
+    #: El token de arranque de la app de escritorio es de un solo uso por proceso.
+    local_bootstrap_consumed: bool = False

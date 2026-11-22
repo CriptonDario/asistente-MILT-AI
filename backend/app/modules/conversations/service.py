@@ -85,6 +85,8 @@ class ConversationService:
                 after = (datetime.fromisoformat(raw_ts), uuid.UUID(raw_id))
             except ValueError as exc:
                 raise ValidationAppError("Cursor de paginación no válido.") from exc
+            if after[0].tzinfo is None:
+                raise ValidationAppError("Cursor de paginación no válido.")
         rows = await repository.list_conversations(
             self.db, user_id, limit=limit + 1, archived=archived, q=q, after=after
         )

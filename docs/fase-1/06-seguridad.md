@@ -20,7 +20,10 @@
   - *Access* JWT de 15 min con `sub`, `role`, `sid`, `exp`, `iat`, `jti`, `aud`, `iss`. Algoritmo fijado en la verificación (sin aceptar `alg: none`).
   - *Refresh* opaco (256 bits aleatorios) de 30 días, guardado como **hash SHA-256**, rotado en cada uso. Si se reutiliza uno ya rotado, se revoca toda su familia.
   - En web: refresh en cookie `HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth`. El access token se mantiene **solo en memoria** en el frontend, nunca en `localStorage`.
-- **Perfil local (Tauri):** al arrancar, Tauri genera un **token aleatorio de un solo uso**, lo pasa al sidecar por variable de entorno y al WebView por IPC. El frontend lo intercambia en `/auth/local-exchange`. Ningún otro proceso o web lo conoce. En modo local de desarrollo (sin Tauri) se exige un login normal.
+- **CSRF del refresh por cookie:** `/auth/refresh` con cookie exige la cabecera `X-MILT-Client: web`. Una cabecera propia obliga al navegador a hacer *preflight* CORS, que falla para cualquier origen no autorizado. Es necesario porque, para `SameSite`, otras webs en `localhost:<otro puerto>` cuentan como el mismo sitio.
+- **Rotación atómica:** el refresh se consume con un `UPDATE … WHERE revoked_at IS NULL` (solo gana una petición concurrente). Una reutilización dentro de los 10 s siguientes, con la sesión todavía viva, devuelve 409 en lugar de revocar la sesión.
+- **Contador de fallos atómico** (`failed_logins = failed_logins + 1`) y el **cambio de contraseña** también tiene límite de intentos y cuenta para el bloqueo.
+- **Perfil local (Tauri):** al arrancar, Tauri genera un **token aleatorio de un solo uso** (el backend lo marca como consumido en el primer canje), lo pasa al sidecar por variable de entorno y al WebView por IPC. El frontend lo intercambia en `/auth/local-exchange`. Ningún otro proceso o web lo conoce. En modo local de desarrollo (sin Tauri) se exige un login normal.
 - **Fuerza bruta:** rate limit por IP y por cuenta (5 intentos/min) y bloqueo progresivo (`locked_until`). Mensajes de error genéricos para no revelar qué cuentas existen.
 - **2FA (TOTP):** previsto en Fase 7 para el perfil servidor y el acceso remoto.
 
@@ -76,7 +79,7 @@ Controles:
 ## 8. Auditoría
 
 Se registran, como mínimo: login y logout (con éxito y fallidos), cambios de contraseña, creación o revocación de sesiones, **cada ejecución de herramienta** (decisión y resultado), cambios de política o de raíces permitidas, activación de sincronización o acceso remoto, borrados de memoria y acciones de admin.
-Cada registro guarda `prev_hash` (hash encadenado), lo que permite detectar alteraciones del historial.
+Cada registro guarda `prev_hash` (hash encadenado), lo que permite detectar alteraciones del historial. `audit_log.user_id` **no tiene clave foránea** a propósito: un `ON DELETE SET NULL` reescribiría filas incluidas en el hash al borrar un usuario y rompería la cadena.
 
 ## 9. Pruebas de seguridad (Fase 8, y continuas desde la Fase 2)
 

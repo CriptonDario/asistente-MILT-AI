@@ -6,7 +6,7 @@ import asyncio
 import contextlib
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any
 
@@ -58,6 +58,7 @@ class PreparedTurn:
     messages: list[ChatMessage]
     user_message_id: uuid.UUID
     dropped_messages: int
+    replaces_message_id: uuid.UUID | None = None
 
 
 class ChatService:
@@ -69,6 +70,10 @@ class ChatService:
         """Ejecuta un turno completo. Nunca lanza errores de dominio: los emite como eventos."""
         try:
             prepared = await self._prepare(req)
+        except asyncio.CancelledError:
+            # Cancelado antes de empezar: el cliente debe recibir igualmente un evento final.
+            await _shielded(_safe_emit(emit, _cancelled_event(req.request_id)))
+            raise
         except AppError as exc:
             await emit(_error_event(req.request_id, exc.code, exc.detail or exc.title))
             return
@@ -88,16 +93,21 @@ class ChatService:
 
             model = req.model or conv.model or (prefs.default_model if prefs else None)
             model = model or self.settings.default_model
+            # Se valida el modelo ANTES de escribir nada: un modelo inexistente o el motor
+            # apagado no deben dejar la conversación en un estado inconsistente.
+            await self.state.llm.get().get_model(model)
             base = base_generation_params(self.settings, prefs)
             if conv.params:
                 base = GenerationParams(**conv.params).merged_over(base)
             params = (req.params or GenerationParams()).merged_over(base)
 
             hlc = self.state.hlc.now()
+            replaces_message_id: uuid.UUID | None = None
             if req.regenerate:
                 recent = await conv_repo.recent_messages(db, conv.id, limit=2)
                 if recent and recent[-1].role == "assistant":
-                    recent[-1].soft_delete(hlc)
+                    # La respuesta anterior se retira solo cuando la nueva se guarde.
+                    replaces_message_id = recent[-1].id
                     recent = recent[:-1]
                 if not recent or recent[-1].role != "user":
                     raise ValidationAppError("No hay ningún mensaje del usuario que regenerar.")
@@ -122,31 +132,35 @@ class ChatService:
                 if conv.title is None:
                     conv.title = title_from_text(content)
 
-            conv.model = model
+            # El modelo de la petición es puntual: el de la conversación solo cambia con PATCH.
             conv.touch(hlc)
             await db.flush()
             history_rows = await conv_repo.recent_messages(db, conv.id, limit=HISTORY_LIMIT)
-            agent_profile = conv.agent_profile
+            history = [
+                ChatMessage(role=m.role, content=m.content)
+                for m in history_rows
+                if m.role in ("user", "assistant")
+                and m.status != "error"
+                and m.content
+                and m.id != replaces_message_id
+            ]
+            num_ctx = params.num_ctx or self.settings.default_num_ctx
+            # Si el mensaje no cabe, se lanza aquí y no se guarda nada (rollback al salir).
+            context = build_context(
+                build_system_prompt(conv.agent_profile, user_name=req.user_name),
+                history,
+                num_ctx=num_ctx,
+                reserve_output=output_reserve(num_ctx, params.max_tokens),
+            )
             await db.commit()
 
-        history = [
-            ChatMessage(role=m.role, content=m.content)
-            for m in history_rows
-            if m.role in ("user", "assistant") and m.status != "error" and m.content
-        ]
-        num_ctx = params.num_ctx or self.settings.default_num_ctx
-        context = build_context(
-            build_system_prompt(agent_profile, user_name=req.user_name),
-            history,
-            num_ctx=num_ctx,
-            reserve_output=output_reserve(num_ctx, params.max_tokens),
-        )
         return PreparedTurn(
             model=model,
             params=params,
             messages=context.messages,
             user_message_id=user_message_id,
             dropped_messages=context.dropped,
+            replaces_message_id=replaces_message_id,
         )
 
     # ------------------------------------------------------------------ generación
@@ -192,11 +206,18 @@ class ChatService:
                 elif isinstance(chunk, Done):
                     usage = chunk.usage
         except asyncio.CancelledError:
-            await self._persist_assistant(
-                req, assistant_id, prepared.model, parts, usage, _elapsed_ms(start), "cancelled"
-            )
-            with contextlib.suppress(Exception):
-                await emit(_error_event(req.request_id, "cancelled", "Generación cancelada."))
+            elapsed = _elapsed_ms(start)
+
+            async def finish_cancelled() -> None:
+                if parts:
+                    await self._persist_assistant(
+                        req, assistant_id, prepared, parts, usage, elapsed, "cancelled"
+                    )
+                await _safe_emit(emit, _cancelled_event(req.request_id))
+
+            # Protegido: una segunda cancelación (p. ej. el usuario pulsa detener y cierra
+            # la pestaña) no debe perder la respuesta parcial ni el evento final.
+            await _shielded(finish_cancelled())
             raise
         except AppError as exc:
             failure = exc
@@ -208,13 +229,13 @@ class ChatService:
         if failure is not None:
             if parts:
                 await self._persist_assistant(
-                    req, assistant_id, prepared.model, parts, usage, latency_ms, "error"
+                    req, assistant_id, prepared, parts, usage, latency_ms, "error"
                 )
             await emit(_error_event(req.request_id, failure.code, failure.detail or failure.title))
             return
 
         await self._persist_assistant(
-            req, assistant_id, prepared.model, parts, usage, latency_ms, "complete"
+            req, assistant_id, prepared, parts, usage, latency_ms, "complete"
         )
         await emit(
             {
@@ -234,7 +255,7 @@ class ChatService:
         self,
         req: TurnRequest,
         message_id: uuid.UUID,
-        model: str,
+        prepared: PreparedTurn,
         parts: list[str],
         usage: Usage,
         latency_ms: int,
@@ -246,13 +267,19 @@ class ChatService:
                 if conv is None:
                     return
                 hlc = self.state.hlc.now()
+                # Regeneración: la respuesta anterior se retira al guardar la nueva
+                # (si la nueva acaba en error, se conservan las dos).
+                if prepared.replaces_message_id is not None and status != "error":
+                    old = await conv_repo.get_message(db, conv.id, prepared.replaces_message_id)
+                    if old is not None:
+                        old.soft_delete(hlc)
                 db.add(
                     Message(
                         id=message_id,
                         conversation_id=conv.id,
                         role="assistant",
                         content="".join(parts),
-                        model=model,
+                        model=prepared.model,
                         prompt_tokens=usage.prompt_tokens or None,
                         completion_tokens=usage.completion_tokens or None,
                         latency_ms=latency_ms,
@@ -272,3 +299,24 @@ def _elapsed_ms(start: float) -> int:
 
 def _error_event(request_id: str, code: str, detail: str) -> dict[str, Any]:
     return {"type": "chat.error", "request_id": request_id, "code": code, "detail": detail}
+
+
+def _cancelled_event(request_id: str) -> dict[str, Any]:
+    return _error_event(request_id, "cancelled", "Generación cancelada.")
+
+
+async def _safe_emit(emit: Emit, event: dict[str, Any]) -> None:
+    with contextlib.suppress(Exception):
+        await emit(event)
+
+
+#: Referencias a tareas protegidas en curso (evita que el GC las destruya).
+_background_tasks: set[asyncio.Task[None]] = set()
+
+
+async def _shielded(coro: Coroutine[Any, Any, None]) -> None:
+    """Ejecuta ``coro`` en una tarea propia que sobrevive a cancelaciones posteriores."""
+    task = asyncio.ensure_future(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    await asyncio.shield(task)

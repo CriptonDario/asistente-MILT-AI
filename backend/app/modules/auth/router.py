@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Request, Response, status
 
 from app.core.config import Settings
 from app.core.deps import AuthDep, DbDep, StateDep, client_ip, require_local_profile
-from app.core.errors import UnauthorizedError
+from app.core.errors import ForbiddenError, UnauthorizedError
 from app.db.types import utcnow
 from app.modules.auth.schemas import (
     ChangePasswordRequest,
@@ -25,6 +25,8 @@ from app.modules.users.schemas import UserOut
 
 REFRESH_COOKIE = "milt_refresh"
 REFRESH_COOKIE_PATH = "/api/v1/auth"
+CSRF_HEADER = "X-MILT-Client"
+CSRF_HEADER_VALUE = "web"
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 sessions_router = APIRouter(prefix="/sessions", tags=["auth"])
@@ -97,6 +99,11 @@ async def refresh(
     raw = body_token or request.cookies.get(REFRESH_COOKIE)
     if not raw:
         raise UnauthorizedError("Falta el refresh token.")
+    if body_token is None and request.headers.get(CSRF_HEADER) != CSRF_HEADER_VALUE:
+        # Protección CSRF: una cabecera propia obliga al navegador a hacer preflight CORS,
+        # que falla para orígenes no autorizados (incluidas otras webs en localhost:<puerto>,
+        # que para SameSite cuentan como el mismo sitio).
+        raise ForbiddenError(f"Falta la cabecera {CSRF_HEADER}.")
     try:
         tokens = await AuthService(db, state).refresh(
             raw, ip=client_ip(request), user_agent=request.headers.get("user-agent")

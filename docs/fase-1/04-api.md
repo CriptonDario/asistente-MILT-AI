@@ -11,6 +11,7 @@ Leyenda de permisos: 🔓 público · 👤 usuario autenticado · 🛡️ admin 
 | Método | Ruta | Permiso | Descripción |
 |--------|------|---------|-------------|
 | GET | `/health` | 🔓 | Estado básico (`ok`) para *liveness* |
+| GET | `/system/setup` | 🔓 | `{needs_setup, registration_open, profile}`: la interfaz decide si muestra "crear administrador" o el login |
 | GET | `/system/info` | 👤 | Perfil (`local`/`server`), versión, estado de Ollama, Qdrant y BD |
 | GET | `/system/capabilities` | 👤 | Funciones habilitadas: voz, sincronización, remoto, proveedores |
 
@@ -20,7 +21,7 @@ Leyenda de permisos: 🔓 público · 👤 usuario autenticado · 🛡️ admin 
 |--------|------|---------|-------------|
 | POST | `/auth/register` | 🔓🌐 (si el registro está abierto) / 🛡️ | Crear cuenta |
 | POST | `/auth/login` | 🔓 | `{email, password, device_name}` → `{access_token, expires_in}` + cookie `refresh` HttpOnly |
-| POST | `/auth/refresh` | 🔓 (cookie) | Rotación del refresh token. Si se reutiliza uno viejo, se revoca toda la familia |
+| POST | `/auth/refresh` | 🔓 (cookie) | Rotación del refresh token. Con cookie exige la cabecera `X-MILT-Client: web` (CSRF). Si se reutiliza uno ya rotado en los últimos 10 s con la sesión viva → `409 refresh_in_progress` (carrera entre pestañas); fuera de esa ventana se revoca toda la familia |
 | POST | `/auth/logout` | 👤 | Revoca la sesión actual |
 | POST | `/auth/local-exchange` | 🏠 | Intercambia el token de arranque de Tauri por una sesión |
 | GET | `/auth/me` | 👤 | Usuario actual |

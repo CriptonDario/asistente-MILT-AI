@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, ForeignKey, Index, Integer, String, Uuid
+from sqlalchemy import BigInteger, Index, Integer, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -24,9 +24,10 @@ class AuditLog(Base):
     )
 
     id: Mapped[int] = mapped_column(BigIntPK, primary_key=True, autoincrement=True)
-    user_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
+    # Sin clave foránea a propósito: las columnas incluidas en el hash nunca deben
+    # cambiar. Un ON DELETE SET NULL reescribiría las filas al borrar un usuario y
+    # rompería la cadena (falsos positivos de manipulación).
+    user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     action: Mapped[str] = mapped_column(String(64), nullable=False)
     target_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)

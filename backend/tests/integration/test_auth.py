@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 
+from app.modules.auth import service as auth_service
 from tests.conftest import (
     ADMIN_EMAIL,
     ADMIN_PASSWORD,
@@ -16,6 +19,8 @@ from tests.conftest import (
     login,
     register,
 )
+
+WEB = {"X-MILT-Client": "web"}
 
 
 def test_first_user_is_admin_and_next_is_user(client: TestClient) -> None:
@@ -98,7 +103,7 @@ def test_refresh_rotation_with_cookie(client: TestClient) -> None:
     first_cookie = client.cookies.get("milt_refresh")
     assert first_cookie
 
-    refreshed = client.post(f"{API}/auth/refresh")
+    refreshed = client.post(f"{API}/auth/refresh", headers=WEB)
     assert refreshed.status_code == 200, refreshed.text
     second_cookie = client.cookies.get("milt_refresh")
     assert second_cookie and second_cookie != first_cookie
@@ -110,7 +115,11 @@ def test_refresh_rotation_with_cookie(client: TestClient) -> None:
     )
 
 
-def test_refresh_reuse_revokes_whole_session(client: TestClient) -> None:
+def test_refresh_reuse_revokes_whole_session(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Fuera de la ventana de gracia, reutilizar un token rotado se trata como robo.
+    monkeypatch.setattr(auth_service, "REFRESH_GRACE", timedelta(0))
     register(client, ADMIN_EMAIL, ADMIN_PASSWORD)
     data = login(client, ADMIN_EMAIL, ADMIN_PASSWORD, use_cookie=False).json()
     old_refresh = data["refresh_token"]

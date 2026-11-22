@@ -43,6 +43,18 @@ async def get_auth(request: Request, db: Annotated[AsyncSession, Depends(get_db)
     return await authenticate_claims(db, claims)
 
 
+async def get_auth_detached(request: Request) -> AuthContext:
+    """Como ``get_auth`` pero con una sesión de BD propia que se cierra al momento.
+
+    Para endpoints de streaming: las dependencias con ``yield`` de la petición se
+    mantienen abiertas mientras dura la respuesta y retendrían una conexión del pool.
+    """
+    state = get_state(request)
+    claims = state.tokens.decode_access_token(extract_bearer(request.headers.get("authorization")))
+    async with state.sessionmaker() as db:
+        return await authenticate_claims(db, claims)
+
+
 def require_permission(permission: Permission) -> Callable[..., Awaitable[AuthContext]]:
     async def dependency(auth: Annotated[AuthContext, Depends(get_auth)]) -> AuthContext:
         if not has_permission(auth.user.role, permission):
@@ -61,4 +73,5 @@ def require_local_profile(request: Request) -> None:
 StateDep = Annotated[AppState, Depends(get_state)]
 DbDep = Annotated[AsyncSession, Depends(get_db)]
 AuthDep = Annotated[AuthContext, Depends(get_auth)]
+DetachedAuthDep = Annotated[AuthContext, Depends(get_auth_detached)]
 AdminDep = Annotated[AuthContext, Depends(require_permission(Permission.USERS_MANAGE))]

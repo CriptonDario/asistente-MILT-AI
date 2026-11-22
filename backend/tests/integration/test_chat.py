@@ -103,7 +103,7 @@ def test_ws_full_turn_streams_and_persists(
 
     refreshed = client.get(f"{API}/conversations/{conv['id']}", headers=headers).json()
     assert refreshed["title"] == "¿Quién eres?", "el título se genera con el primer mensaje"
-    assert refreshed["model"] == "fake-model"
+    assert refreshed["model"] is None, "el modelo por petición no cambia el de la conversación"
 
 
 def test_ws_history_is_sent_as_context(

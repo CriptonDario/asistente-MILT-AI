@@ -6,14 +6,21 @@ import hmac
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import CursorResult, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError, ForbiddenError, NotFoundError, UnauthorizedError
+from app.core.errors import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    RateLimitedError,
+    UnauthorizedError,
+)
 from app.core.state import AppState
 from app.db.types import utcnow
-from app.modules.auth.context import AuthContext
+from app.modules.auth.context import AuthContext, session_is_active
 from app.modules.auth.models import Device, RefreshToken
 from app.modules.auth.schemas import LoginRequest, RegisterRequest, SessionOut
 from app.modules.users import repository as users_repo
@@ -26,6 +33,13 @@ from app.security.tokens import generate_refresh_token, hash_token
 
 INVALID_CREDENTIALS = "Correo o contraseña incorrectos, o la cuenta está bloqueada temporalmente."
 MAX_LOCKOUT_MINUTES = 60
+#: Ventana en la que un refresh token recién rotado no se considera robado (carreras).
+REFRESH_GRACE = timedelta(seconds=10)
+
+
+class RefreshInProgressError(ConflictError):
+    code = "refresh_in_progress"
+    title = "Renovación de sesión en curso"
 
 
 @dataclass(frozen=True)
@@ -98,12 +112,7 @@ class AuthService:
         valid = await self.state.passwords.verify(user.password_hash, data.password)
         if not valid or not user.is_active:
             if not valid:
-                user.failed_logins += 1
-                if user.failed_logins >= self.settings.lockout_threshold:
-                    exponent = user.failed_logins - self.settings.lockout_threshold
-                    minutes = min(2**exponent, MAX_LOCKOUT_MINUTES)
-                    user.locked_until = now + timedelta(minutes=minutes)
-                await self.db.commit()
+                await self._register_failed_attempt(user.id)
             await self._audit_login_failure(
                 user.id, ip, "bad_password" if not valid else "inactive"
             )
@@ -133,6 +142,31 @@ class AuthService:
             details={"platform": data.platform},
         )
         return tokens
+
+    async def _register_failed_attempt(self, user_id: uuid.UUID) -> None:
+        """Incrementa el contador de fallos de forma atómica y aplica el bloqueo progresivo.
+
+        Un ``UPDATE ... SET failed_logins = failed_logins + 1`` evita que intentos
+        concurrentes se pisen entre sí (lectura-modificación-escritura en el ORM).
+        """
+        result = await self.db.execute(
+            update(User)
+            .where(User.id == user_id)
+            .values(failed_logins=User.failed_logins + 1)
+            .returning(User.failed_logins)
+            .execution_options(synchronize_session=False)
+        )
+        failures = int(result.scalar_one())
+        threshold = self.settings.lockout_threshold
+        if failures >= threshold:
+            minutes = min(2 ** (failures - threshold), MAX_LOCKOUT_MINUTES)
+            await self.db.execute(
+                update(User)
+                .where(User.id == user_id)
+                .values(locked_until=utcnow() + timedelta(minutes=minutes))
+                .execution_options(synchronize_session=False)
+            )
+        await self.db.commit()
 
     async def _audit_login_failure(
         self, user_id: uuid.UUID | None, ip: str | None, reason: str
@@ -193,6 +227,13 @@ class AuthService:
 
         now = utcnow()
         if token.revoked_at is not None:
+            if now - token.revoked_at <= REFRESH_GRACE and await session_is_active(
+                self.db, token.family_id
+            ):
+                # Dos pestañas (o un reintento) renovando a la vez: no es un robo.
+                raise RefreshInProgressError(
+                    "La sesión se acaba de renovar. Reintenta con el token actual."
+                )
             # Reutilización de un token ya rotado: posible robo. Se cierra toda la sesión.
             await self._revoke_family(token.family_id)
             await self.db.commit()
@@ -212,7 +253,18 @@ class AuthService:
         if user is None or not user.is_active:
             raise UnauthorizedError("Usuario no válido o desactivado.")
 
-        token.revoked_at = now
+        # Rotación atómica: solo una petición concurrente puede consumir este token.
+        rotated = await self.db.execute(
+            update(RefreshToken)
+            .where(RefreshToken.id == token.id, RefreshToken.revoked_at.is_(None))
+            .values(revoked_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        if cast("CursorResult[Any]", rotated).rowcount != 1:
+            await self.db.rollback()
+            raise RefreshInProgressError(
+                "La sesión se acaba de renovar. Reintenta con el token actual."
+            )
         if token.device_id is not None:
             device = await self.db.get(Device, token.device_id)
             if device is not None:
@@ -239,7 +291,16 @@ class AuthService:
         self, auth: AuthContext, current: str, new: str, *, ip: str | None
     ) -> None:
         user = auth.user
+        # Con un access token robado se podría adivinar la contraseña actual: se limita
+        # el ritmo y los fallos cuentan para el mismo bloqueo que el login.
+        await self.state.rate_limiter.hit(f"pwchange:{user.id}", limit=5, window_seconds=300)
+        if user.locked_until is not None and user.locked_until > utcnow():
+            raise RateLimitedError(
+                int((user.locked_until - utcnow()).total_seconds()),
+                "Cuenta bloqueada temporalmente por intentos fallidos.",
+            )
         if not await self.state.passwords.verify(user.password_hash, current):
+            await self._register_failed_attempt(user.id)
             await self.state.audit.record(
                 "auth.password_change", user_id=user.id, outcome="failure", ip=ip
             )
@@ -324,6 +385,14 @@ class AuthService:
         user = await users_repo.first_admin(self.db)
         if user is None:
             raise ConflictError("Primero debes crear la cuenta de administrador.")
+        # Un solo uso por arranque del proceso. Comprobar y marcar sin ``await`` entre
+        # medias lo hace atómico en el bucle de eventos.
+        if self.state.local_bootstrap_consumed:
+            await self.state.audit.record(
+                "auth.local_exchange", outcome="denied", ip=ip, details={"reason": "reused"}
+            )
+            raise UnauthorizedError("El token local ya se ha utilizado.")
+        self.state.local_bootstrap_consumed = True
         device = Device(user_id=user.id, name="MILT Escritorio", platform="windows")
         device.last_seen_at = utcnow()
         self.db.add(device)

@@ -10,6 +10,7 @@ from tests.conftest import API, auth_headers
 
 PUBLIC_ROUTES = {
     ("GET", f"{API}/health"),
+    ("GET", f"{API}/system/setup"),
     ("POST", f"{API}/auth/register"),
     ("POST", f"{API}/auth/login"),
     ("POST", f"{API}/auth/refresh"),
