@@ -16,6 +16,7 @@ from app.llm.base import (
     ChatMessage,
     Done,
     GenerationParams,
+    InsufficientMemoryError,
     ModelInfo,
     ModelNotFoundError,
     ProviderError,
@@ -30,6 +31,19 @@ from app.llm.base import (
 log = structlog.get_logger(__name__)
 
 _NS_PER_MS = 1_000_000
+_OOM_MARKERS = ("out-of-memory", "out of memory", "failed to allocate", "insufficient memory")
+_OOM_DETAIL = (
+    "Ollama no tiene memoria RAM suficiente para cargar el modelo. Cierra programas "
+    "(navegadores, Docker) o elige un modelo más pequeño."
+)
+
+
+def _provider_error(message: str) -> ProviderError:
+    """Traduce los errores de Ollama más habituales a errores comprensibles."""
+    lowered = message.lower()
+    if any(marker in lowered for marker in _OOM_MARKERS):
+        return InsufficientMemoryError(_OOM_DETAIL)
+    return ProviderError(message)
 
 
 class OllamaProvider:
@@ -79,7 +93,7 @@ class OllamaProvider:
         if response.status_code == 404:
             raise ModelNotFoundError(self._error_message(response))
         if response.status_code >= 400:
-            raise ProviderError(self._error_message(response))
+            raise _provider_error(self._error_message(response))
         try:
             data = response.json()
         except ValueError as exc:
@@ -202,7 +216,7 @@ class OllamaProvider:
                     if response.status_code == 404:
                         self._model_cache.pop(model, None)
                         raise ModelNotFoundError(message)
-                    raise ProviderError(message)
+                    raise _provider_error(message)
 
                 async for line in response.aiter_lines():
                     if not line.strip():
@@ -212,7 +226,7 @@ class OllamaProvider:
                     except json.JSONDecodeError as exc:
                         raise ProviderError("Fragmento de respuesta no válido.") from exc
                     if isinstance(data.get("error"), str):
-                        raise ProviderError(data["error"])
+                        raise _provider_error(str(data["error"]))
 
                     message_data = data.get("message") or {}
                     thinking = message_data.get("thinking")
