@@ -77,8 +77,8 @@ Cobertura ≥ 80 % en servicios críticos, E2E con Playwright, pruebas de seguri
 
 | Uso | Modelo | Memoria aprox. | Nota |
 |-----|--------|----------------|------|
-| Chat general | `qwen3:4b` | ~2,5–3 GB | Buen español y *tool calling*. Esperable ~4–8 tokens/s en CPU |
-| Alternativa más rápida | `llama3.2:3b` o `qwen3:1.7b` | ~1,5–2 GB | Para respuestas rápidas o equipos ocupados |
+| Chat general (**por defecto**) | `qwen3:1.7b` | ~1,4 GB | Medido el 22-11-2026: respuesta corta en ~7 s con el modelo cargado (~19 s el primer token en frío) |
+| Calidad superior | `qwen3:4b` | ~2,5–3 GB | Solo con RAM libre suficiente: con <1 GB libre se paginaba a disco (>5 min por respuesta) |
 | Embeddings | `nomic-embed-text` (~0,3 GB) por defecto; `bge-m3` (~1,2 GB) opcional | — | Se evalúa la calidad en español en la Fase 4 |
 | Contexto | `num_ctx = 4096` | — | Contextos mayores multiplican la RAM y la latencia |
 

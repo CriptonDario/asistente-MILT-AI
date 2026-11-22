@@ -7,7 +7,7 @@
 | Fase | Estado |
 |------|--------|
 | 1. Arquitectura y planificación | ✅ Completada ([docs](docs/README.md)) |
-| 2. Backend | ⏳ Pendiente |
+| 2. Backend | ✅ Completada ([backend/README.md](backend/README.md)) |
 | 3. Frontend | — |
 | 4. Memoria y RAG | — |
 | 5. Herramientas | — |

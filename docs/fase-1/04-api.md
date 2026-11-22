@@ -11,6 +11,7 @@ Leyenda de permisos: 🔓 público · 👤 usuario autenticado · 🛡️ admin 
 | Método | Ruta | Permiso | Descripción |
 |--------|------|---------|-------------|
 | GET | `/health` | 🔓 | Estado básico (`ok`) para *liveness* |
+| GET | `/system/setup` | 🔓 | `{needs_setup, registration_open, profile}`: la interfaz decide si muestra "crear administrador" o el login |
 | GET | `/system/info` | 👤 | Perfil (`local`/`server`), versión, estado de Ollama, Qdrant y BD |
 | GET | `/system/capabilities` | 👤 | Funciones habilitadas: voz, sincronización, remoto, proveedores |
 
@@ -20,7 +21,7 @@ Leyenda de permisos: 🔓 público · 👤 usuario autenticado · 🛡️ admin 
 |--------|------|---------|-------------|
 | POST | `/auth/register` | 🔓🌐 (si el registro está abierto) / 🛡️ | Crear cuenta |
 | POST | `/auth/login` | 🔓 | `{email, password, device_name}` → `{access_token, expires_in}` + cookie `refresh` HttpOnly |
-| POST | `/auth/refresh` | 🔓 (cookie) | Rotación del refresh token. Si se reutiliza uno viejo, se revoca toda la familia |
+| POST | `/auth/refresh` | 🔓 (cookie) | Rotación del refresh token. Con cookie exige la cabecera `X-MILT-Client: web` (CSRF). Si se reutiliza uno ya rotado en los últimos 10 s con la sesión viva → `409 refresh_in_progress` (carrera entre pestañas); fuera de esa ventana se revoca toda la familia |
 | POST | `/auth/logout` | 👤 | Revoca la sesión actual |
 | POST | `/auth/local-exchange` | 🏠 | Intercambia el token de arranque de Tauri por una sesión |
 | GET | `/auth/me` | 👤 | Usuario actual |
@@ -43,7 +44,7 @@ Leyenda de permisos: 🔓 público · 👤 usuario autenticado · 🛡️ admin 
 |--------|------|---------|-------------|
 | GET | `/models` | 👤 | Modelos disponibles por proveedor: `{provider, name, size, family, capabilities:[chat,tools,embed,vision]}` |
 | GET | `/models/{name}` | 👤 | Detalles (contexto máximo, cuantización) |
-| POST | `/models/pull` | 🛡️🏠 | Descarga un modelo en Ollama (progreso por WS) |
+| POST | `/models/pull` | 🛡️🏠 | Descarga un modelo en Ollama (progreso por WS). **Pendiente: Fase 6** (asistente de primer arranque) |
 
 ## Conversaciones y mensajes
 
@@ -56,9 +57,9 @@ Leyenda de permisos: 🔓 público · 👤 usuario autenticado · 🛡️ admin 
 | DELETE | `/conversations/{id}` | 👤 | Borrado lógico |
 | GET | `/conversations/{id}/messages` | 👤 | Mensajes paginados |
 | DELETE | `/conversations/{id}/messages/{mid}` | 👤 | Eliminar un mensaje |
-| POST | `/conversations/{id}/regenerate` | 👤 | Regenerar la última respuesta (resultado por WS) |
+| — | *(regenerar)* | 👤 | Se hace con el mensaje WS `chat.regenerate` o con `regenerate: true` en `POST /chat/completions`; no hay endpoint REST aparte |
 | GET | `/conversations/{id}/export?format=md\|json` | 👤 | Exportar |
-| GET | `/search/messages?q=` | 👤 | Búsqueda textual en el historial |
+| GET | `/search/messages?q=` | 👤 | Búsqueda textual en el historial (Fase 2: `LIKE`; Fase 4: FTS5/`tsvector`) |
 
 ### Chat en streaming
 
@@ -70,7 +71,9 @@ Cliente → servidor:
 { "type": "chat.send", "request_id": "uuid", "conversation_id": "uuid",
   "content": "texto", "attachments": ["document_id"],
   "model": "qwen3:8b", "params": { "temperature": 0.7 } }
+{ "type": "chat.regenerate", "request_id": "uuid", "conversation_id": "uuid", "model"?: "...", "params"?: {} }
 { "type": "chat.cancel", "request_id": "uuid" }
+{ "type": "auth", "token": "..." }   // renovar el token sin reconectar
 { "type": "tool.confirm", "call_id": "uuid", "approved": true }
 { "type": "ping" }
 ```
@@ -78,14 +81,17 @@ Cliente → servidor:
 Servidor → cliente:
 
 ```jsonc
-{ "type": "chat.started",  "request_id", "message_id" }
+{ "type": "ready",         "user_id" }
+{ "type": "chat.started",  "request_id", "conversation_id", "message_id", "user_message_id", "model", "context_dropped_messages" }
 { "type": "chat.delta",    "request_id", "text": "..." }
+{ "type": "chat.thinking", "request_id", "text": "..." }   // solo si think=true
 { "type": "chat.context",  "request_id", "sources": [{ "kind": "memory|document", "id", "title", "locator" }] }
 { "type": "tool.call",     "request_id", "call_id", "tool", "arguments" }
 { "type": "tool.confirm_request", "request_id", "call_id", "tool", "summary", "risk_level", "expires_in": 120 }
 { "type": "tool.result",   "request_id", "call_id", "status": "ok|error|denied" }
-{ "type": "chat.done",     "request_id", "message_id", "usage": { "prompt_tokens", "completion_tokens", "latency_ms" } }
-{ "type": "chat.error",    "request_id", "code": "provider_unavailable|model_not_found|context_overflow|cancelled", "detail" }
+{ "type": "chat.done",     "request_id", "message_id", "usage": { "prompt_tokens", "completion_tokens", "latency_ms", "first_token_ms" } }
+{ "type": "chat.error",    "request_id", "code": "provider_unavailable|model_not_found|context_overflow|cancelled|not_found|validation_error|busy", "detail" }
+{ "type": "error",         "code": "unauthorized|token_expired|invalid_message|frame_too_large|busy|not_found", "detail", "request_id"? }
 { "type": "pong" }
 ```
 
