@@ -247,7 +247,69 @@ def test_invalid_and_unknown_calls_and_call_limit(
     assert llm.calls[-1]["tools"] is None, "tras el límite ya no se ofrecen herramientas"
 
 
+def test_tool_outside_conversation_profile_is_rejected(
+    client_factory: Callable[..., TestClient], project: Path
+) -> None:
+    # El perfil «general» no ofrece file_write: aunque el modelo la invente, no se ejecuta
+    # (ni siquiera llega a pedir confirmación).
+    client, llm, token, _h = setup(client_factory, project)
+    conv = create_conversation(client, token, tools_enabled=True, agent_profile="general")
+    target = project / "colado.txt"
+    llm.tool_rounds = [[call("file_write", path=str(target), content="x")]]
+    ws, session = open_ws(client, token)
+    try:
+        send(session, conv["id"], "escribe")
+        events = collect(session, on_confirm=lambda _e: True)
+    finally:
+        ws.__exit__(None, None, None)
+    offered = {t["function"]["name"] for t in llm.calls[0]["tools"]}
+    assert "file_write" not in offered
+    assert not any(e["type"] == "tool.confirm_request" for e in events)
+    assert next(e for e in events if e["type"] == "tool.result")["status"] == "error"
+    assert not target.exists()
+
+
+def test_cancel_while_waiting_confirmation_is_recorded(
+    client_factory: Callable[..., TestClient], project: Path
+) -> None:
+    client, llm, token, h = setup(client_factory, project)
+    conv = create_conversation(client, token, tools_enabled=True, agent_profile="coder")
+    target = project / "cancelado.txt"
+    llm.tool_rounds = [[call("file_write", "k1", path=str(target), content="x")]]
+    ws, session = open_ws(client, token)
+    try:
+        send(session, conv["id"], "escribe")
+        while session.receive_json()["type"] != "tool.confirm_request":
+            pass
+        session.send_json({"type": "chat.cancel", "request_id": "r1"})
+        events = collect(session)
+    finally:
+        ws.__exit__(None, None, None)
+    assert events[-1]["type"] == "chat.error" and events[-1]["code"] == "cancelled"
+    assert not target.exists()
+    executions = client.get(f"{API}/tools/executions", headers=h).json()
+    assert executions[0]["tool_name"] == "file_write"
+    assert executions[0]["decision"] == "cancelled"
+    assert executions[0]["arguments"]["content"] == "[1 caracteres]", "sin guardar contenido"
+    actions = [e["action"] for e in client.get(f"{API}/audit", headers=h).json()]
+    assert "tool.execute" in actions, "la cancelación queda auditada"
+
+
 # --------------------------------------------------------------------------- carpetas
+def test_only_admin_sets_allowed_roots(
+    client: TestClient, user_token: str, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    folder = tmp_path_factory.mktemp("de-usuario")
+    response = client.put(
+        f"{API}/settings/allowed-roots",
+        json={"roots": [str(folder)]},
+        headers=auth_headers(user_token),
+    )
+    assert response.status_code == 403
+    roots = client.get(f"{API}/settings/allowed-roots", headers=auth_headers(user_token)).json()
+    assert roots["roots"] == []
+
+
 def test_allowed_roots_validation(
     client: TestClient, admin_token: str, tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
 ) -> None:

@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import gc
 import importlib.util
+import itertools
 import time
 import uuid
 from pathlib import Path
@@ -34,6 +36,56 @@ _SIGNATURES: tuple[tuple[str, bytes, int], ...] = (
 )
 
 
+#: Demultiplexor de FFmpeg para cada formato detectado. Se fuerza el formato en lugar de
+#: dejar que FFmpeg lo adivine: así no se usan demultiplexores que leen otras rutas o URL
+#: (concat, hls...) ni se interpreta el archivo como algo distinto de lo comprobado.
+AV_FORMATS = {"webm": "matroska", "ogg": "ogg", "wav": "wav", "mp4": "mov", "mp3": "mp3"}
+SAMPLE_RATE = 16_000
+
+
+class AudioTooLongError(ValidationAppError):
+    pass
+
+
+def decode_limited(path: Path, kind: str, max_seconds: float) -> Any:
+    """Decodifica a PCM mono de 16 kHz (``float32``) y se detiene al superar ``max_seconds``.
+
+    Equivale a ``faster_whisper.audio.decode_audio`` pero con un tope: se decodifica
+    por partes y se aborta en cuanto el audio es más largo de lo permitido.
+    """
+    import av
+    import numpy as np
+
+    limit = int(max_seconds * SAMPLE_RATE)
+    resampler = av.AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
+    chunks: list[Any] = []
+    samples = 0
+    try:
+        with av.open(
+            str(path), mode="r", format=AV_FORMATS[kind], metadata_errors="ignore"
+        ) as container:
+            if not container.streams.audio:
+                raise ValidationAppError("El archivo no contiene audio.")
+            frames = container.decode(audio=0)
+            for frame in itertools.chain(frames, [None]):
+                for out in resampler.resample(frame):
+                    array = out.to_ndarray().reshape(-1)
+                    samples += array.shape[0]
+                    if samples > limit:
+                        raise AudioTooLongError(
+                            f"El audio dura más de {max_seconds:.0f} s; graba un mensaje más corto."
+                        )
+                    chunks.append(array)
+    except av.error.FFmpegError as exc:
+        raise ValidationAppError("El audio está dañado o no se puede decodificar.") from exc
+    finally:
+        del resampler
+        gc.collect()  # PyAV no libera el remuestreador sin ayuda (faster-whisper #390)
+    if not chunks:
+        return np.zeros(0, dtype=np.float32)
+    return np.concatenate(chunks).astype(np.float32) / 32768.0
+
+
 def detect_audio(head: bytes) -> str:
     for name, magic, offset in _SIGNATURES:
         if head[offset : offset + len(magic)] == magic:
@@ -46,7 +98,7 @@ def detect_audio(head: bytes) -> str:
 
 
 class Transcriber(Protocol):
-    def transcribe(self, path: Path, language: str) -> str: ...
+    def transcribe(self, path: Path, language: str, *, kind: str, max_seconds: float) -> str: ...
 
 
 class WhisperTranscriber:
@@ -74,11 +126,14 @@ class WhisperTranscriber:
             )
         return self._model
 
-    def transcribe(self, path: Path, language: str) -> str:
+    def transcribe(self, path: Path, language: str, *, kind: str, max_seconds: float) -> str:
+        # Primero se decodifica con tope (antes de cargar el modelo: un audio no válido o
+        # demasiado largo se rechaza sin gastar memoria en Whisper).
+        audio = decode_limited(path, kind, max_seconds)
+        if audio.shape[0] == 0:
+            return ""
         model = self._load()
-        segments, _info = model.transcribe(
-            str(path), language=language, beam_size=1, vad_filter=True
-        )
+        segments, _info = model.transcribe(audio, language=language, beam_size=1, vad_filter=True)
         return " ".join(segment.text.strip() for segment in segments).strip()
 
 
@@ -120,7 +175,12 @@ class VoiceService:
         try:
             async with self._lock:
                 text = await anyio.to_thread.run_sync(
-                    transcriber.transcribe, path, language or self.settings.voice_language
+                    lambda: transcriber.transcribe(
+                        path,
+                        language or self.settings.voice_language,
+                        kind=kind,
+                        max_seconds=float(self.settings.voice_max_seconds),
+                    )
                 )
         except (ValidationAppError, ServiceUnavailableError):
             raise

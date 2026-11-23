@@ -55,6 +55,20 @@ Controles:
 7. **Defensa ante inyección de prompt:** el contenido de documentos y de resultados de herramientas se envuelve como *datos no confiables* y el prompt de sistema indica no obedecer instrucciones que vengan de ahí. Además, ninguna acción sensible se ejecuta sin confirmación, **aunque el modelo sea engañado**. La seguridad no depende de que el modelo "se porte bien".
 8. **Ciberseguridad responsable:** las herramientas de red se limitan al **propio equipo y a la red local configurada por el usuario** (rangos privados RFC 1918 declarados en ajustes), sin escaneo de terceros.
 
+Controles añadidos tras la revisión de la Fase 5:
+
+- **Expresiones regulares del modelo** (`code_search`): se evalúan con el módulo `regex` con tiempo límite por línea (0,25 s) y un presupuesto total de 20 s. La búsqueda libera el GIL, así que una expresión catastrófica como `(a|aa)+$` no bloquea el servidor. Los patrones de `logs_analyze` están acotados (`.{0,80}`) y las líneas se recortan a 2000 caracteres.
+- **Memoria acotada:** los logs se leen línea a línea desde el final (máx. 20 MB y 100 000 líneas), y `ioc_match` calcula los hashes por fragmentos.
+- **Recorridos sin enlaces:** `project_tree`, `code_search` e `ioc_match` no siguen symlinks ni *junctions* (al contrario que `os.walk` en Windows) y tienen un tope de entradas visitadas.
+- **Nombres que Windows reinterpreta:** se rechazan los componentes con punto o espacio final (`.env.` es `.env`) y los nombres de dispositivo (`CON`, `NUL`, `COM1`…). Además, `file_write` no escribe dentro de `.git`, crea el temporal con un nombre aleatorio y `O_EXCL`, y no sigue un enlace colocado en el lugar de la copia `.milt.bak`.
+- **Solo herramientas del perfil:** si el modelo llama a una herramienta del registro que no se le ofreció en ese turno, la llamada se rechaza.
+- **Solo administradores:** autorizar carpetas (`PUT /settings/allowed-roots`) y ejecutar scripts.
+- **Scripts:** el archivo se abre en Windows **sin compartir la escritura** desde la verificación del hash hasta que termina la ejecución, para que no pueda cambiar entre ambas (TOCTOU). Los argumentos por defecto no pueden empezar por `-`, y la confirmación los muestra en JSON. El proceso arranca **suspendido** y solo se reanuda tras entrar en el Job Object, así que ningún proceso hijo escapa de los límites.
+- **Cancelación:** si se cancela una respuesta durante una herramienta, el script se mata en menos de un segundo, y la ejecución queda registrada como `cancelled` en el historial y en la auditoría.
+- **Historial:** de `file_write` solo se guarda la longitud del contenido, nunca el texto. Las cadenas largas se recortan y se conservan las últimas 5000 ejecuciones por usuario.
+- **Red propia:** solo los rangos `10/8`, `172.16/12`, `192.168/16`, `127/8`, `169.254/16`, `::1`, `fe80::/10` y `fc00::/7`. Quedan fuera `0.0.0.0`, CGNAT, los rangos de documentación, 6to4 y NAT64, que `is_private` sí admitía.
+- **Voz:** el contenedor se decodifica con el formato **forzado** según la firma detectada, por lo que FFmpeg no prueba demultiplexores como `concat` o `hls`. Además, se detiene al superar `MILT_VOICE_MAX_SECONDS` (120 s), antes de cargar Whisper.
+
 ### 4.1 Memoria y documentos (Fase 4)
 
 - **Fragmentos de documentos = datos no confiables.** Nunca van en el mensaje de sistema: se insertan en el mensaje del usuario entre marcas `<<<DOC {nonce}>>> … <<<FIN {nonce}>>>`, con un nonce aleatorio por turno. Así el contenido no puede cerrar el bloque ni hacerse pasar por instrucciones del sistema. Los **recuerdos** (aprobados por el usuario) sí van en el sistema.

@@ -11,12 +11,13 @@ from typing import Any
 
 import structlog
 from pydantic import ValidationError
+from sqlalchemy import delete, select
 
 from app.core.errors import AppError
 from app.core.logging import redact
 from app.llm.base import ToolCallRequest
 from app.modules.automation.models import ToolExecution
-from app.tools.base import Decision, RiskLevel, ToolContext, truncate
+from app.tools.base import Decision, RiskLevel, Tool, ToolArgs, ToolContext, truncate
 from app.tools.policy import decide
 from app.tools.registry import ToolRegistry
 
@@ -26,6 +27,33 @@ Emit = Callable[[dict[str, Any]], Awaitable[None]]
 
 #: Riesgos que se registran también en la auditoría encadenada.
 AUDITED = frozenset({RiskLevel.WRITE, RiskLevel.EXECUTE, RiskLevel.NETWORK})
+#: Ejecuciones que se conservan por usuario (las más antiguas se borran).
+MAX_EXECUTIONS_PER_USER = 5000
+#: Argumentos cuyo valor no se guarda (solo su longitud): contenido de archivos.
+CONTENT_ARGUMENTS = frozenset({"content"})
+MAX_STORED_STRING = 500
+
+
+def _shrink(value: Any) -> Any:
+    if isinstance(value, str):
+        return value[:MAX_STORED_STRING] + "…" if len(value) > MAX_STORED_STRING else value
+    if isinstance(value, list):
+        return [_shrink(v) for v in value[:50]]
+    if isinstance(value, dict):
+        return {k: _shrink(v) for k, v in list(value.items())[:50]}
+    return value
+
+
+def stored_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Argumentos para el historial y la auditoría: sin secretos ni contenidos completos."""
+    clean = redact(arguments)
+    out: dict[str, Any] = {}
+    for key, value in clean.items():
+        if key in CONTENT_ARGUMENTS and isinstance(value, str):
+            out[key] = f"[{len(value)} caracteres]"
+        else:
+            out[key] = _shrink(value)
+    return out
 
 
 class ConfirmationRegistry:
@@ -84,13 +112,15 @@ class ToolExecutor:
         overrides: dict[str, str] | None,
         can_confirm: bool,
         message_id: uuid.UUID | None,
+        allowed_tools: frozenset[str] | None = None,
     ) -> ToolOutcome:
-        settings = ctx.state.settings
+        """``allowed_tools``: las herramientas ofrecidas al modelo en este turno. Un modelo
+        puede inventarse la llamada a otra del registro (de otro perfil): se rechaza."""
         call_id = call.id or uuid.uuid4().hex
         tool = self.registry.get(call.name)
         start = time.perf_counter()
 
-        if tool is None:
+        if tool is None or (allowed_tools is not None and tool.name not in allowed_tools):
             return await self._finish(
                 ctx,
                 emit,
@@ -129,6 +159,54 @@ class ToolExecutor:
             )
 
         arguments = args.model_dump(mode="json")
+        try:
+            return await self._run_validated(
+                tool,
+                args,
+                arguments,
+                call_id,
+                ctx,
+                emit,
+                request_id,
+                overrides,
+                can_confirm,
+                message_id,
+                start,
+            )
+        except asyncio.CancelledError:
+            # La respuesta se canceló (o se cerró la conexión) a mitad: queda constancia
+            # en el historial y en la auditoría aunque la tarea esté cancelándose.
+            await asyncio.shield(
+                self._record(
+                    ctx,
+                    call_id,
+                    tool.name,
+                    tool.risk.value,
+                    arguments,
+                    "cancelled",
+                    "error",
+                    "Cancelada: la respuesta se interrumpió durante la herramienta.",
+                    round((time.perf_counter() - start) * 1000),
+                    message_id,
+                )
+            )
+            raise
+
+    async def _run_validated(
+        self,
+        tool: Tool[Any],
+        args: ToolArgs,
+        arguments: dict[str, Any],
+        call_id: str,
+        ctx: ToolContext,
+        emit: Emit,
+        request_id: str,
+        overrides: dict[str, str] | None,
+        can_confirm: bool,
+        message_id: uuid.UUID | None,
+        start: float,
+    ) -> ToolOutcome:
+        settings = ctx.state.settings
         summary = tool.describe(args)
         await emit(
             {
@@ -219,14 +297,19 @@ class ToolExecutor:
                 user_summary="Bloqueada por la política de permisos",
             )
 
+        limit = (
+            settings.tool_timeout_seconds + settings.script_max_timeout_seconds
+            if tool.risk == RiskLevel.EXECUTE
+            else settings.tool_timeout_seconds
+        )
         try:
-            result = await asyncio.wait_for(
-                tool.run(args, ctx),
-                timeout=settings.tool_timeout_seconds + 300
-                if tool.risk == RiskLevel.EXECUTE
-                else settings.tool_timeout_seconds,
-            )
+            result = await asyncio.wait_for(tool.run(args, ctx), timeout=limit)
         except TimeoutError:
+            partial = (
+                " Pudo quedar a medias: comprueba el resultado antes de repetirla."
+                if tool.risk in AUDITED
+                else ""
+            )
             return await self._finish(
                 ctx,
                 emit,
@@ -237,7 +320,7 @@ class ToolExecutor:
                 arguments,
                 decision_label,
                 "error",
-                "La herramienta tardó demasiado y se canceló.",
+                f"La herramienta superó el tiempo máximo ({limit:.0f} s) y se detuvo.{partial}",
                 message_id,
                 start,
             )
@@ -370,12 +453,8 @@ class ToolExecutor:
         duration_ms: int,
         message_id: uuid.UUID | None,
     ) -> None:
-        stored_args = redact(arguments)
-        # Los contenidos largos (p. ej. file_write) no se guardan enteros en el historial.
-        stored_args = {
-            k: (v[:500] + "…" if isinstance(v, str) and len(v) > 500 else v)
-            for k, v in stored_args.items()
-        }
+        # El contenido de los archivos (file_write) no se guarda: solo su longitud.
+        stored_args = stored_arguments(arguments)
         try:
             async with ctx.state.sessionmaker() as db:
                 db.add(
@@ -391,6 +470,19 @@ class ToolExecutor:
                         status=status,
                         result_summary=summary[:2000],
                         duration_ms=duration_ms,
+                    )
+                )
+                await db.flush()
+                # Retención: se conservan las últimas MAX_EXECUTIONS_PER_USER.
+                keep = (
+                    select(ToolExecution.id)
+                    .where(ToolExecution.user_id == ctx.user_id)
+                    .order_by(ToolExecution.created_at.desc(), ToolExecution.id.desc())
+                    .limit(MAX_EXECUTIONS_PER_USER)
+                )
+                await db.execute(
+                    delete(ToolExecution).where(
+                        ToolExecution.user_id == ctx.user_id, ToolExecution.id.not_in(keep)
                     )
                 )
                 await db.commit()

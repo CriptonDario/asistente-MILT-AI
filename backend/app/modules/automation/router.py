@@ -150,9 +150,13 @@ async def get_allowed_roots(db: DbDep, auth: AuthDep) -> AllowedRoots:
 
 @router.put("/settings/allowed-roots", response_model=AllowedRoots, dependencies=LocalOnly)
 async def set_allowed_roots(
-    body: AllowedRoots, request: Request, db: DbDep, state: StateDep, auth: AuthDep
+    body: AllowedRoots, request: Request, db: DbDep, state: StateDep, auth: AdminDep
 ) -> AllowedRoots:
-    """Carpetas a las que pueden acceder las herramientas (solo en el equipo local)."""
+    """Carpetas a las que pueden acceder las herramientas (solo administrador, en local).
+
+    Autorizar una carpeta da acceso de lectura a todo lo que contiene: no puede hacerlo
+    cualquier usuario de la instalación.
+    """
     validated: list[str] = []
     for raw in body.roots:
         try:

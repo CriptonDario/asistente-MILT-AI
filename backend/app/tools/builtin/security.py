@@ -15,9 +15,9 @@ import os
 import re
 import socket
 import sys
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from pathlib import Path
-from typing import Annotated, ClassVar, Literal
+from typing import Annotated, BinaryIO, ClassVar, Literal
 
 import anyio.to_thread
 from pydantic import Field
@@ -26,10 +26,13 @@ from sqlalchemy import func, select
 from app.modules.automation.models import SecurityReport
 from app.modules.documents.parsers import decode_text
 from app.tools.base import RiskLevel, Tool, ToolArgs, ToolContext, ToolError, ToolResult, truncate
-from app.tools.builtin.files import SKIP_DIRS, PathArg, _guard, _is_binary
+from app.tools.builtin.files import PathArg, TreeWalker, _guard, _is_binary
 from app.tools.sandbox import run_sandboxed
 
-MAX_LOG_BYTES = 50 * 1024 * 1024
+#: Solo se analiza el final del log: memoria acotada aunque el archivo pese gigas.
+MAX_LOG_BYTES = 20 * 1024 * 1024
+MAX_LINE_BYTES = 8 * 1024
+MAX_LINE_CHARS = 2000
 MAX_IOC_FILES = 2000
 MAX_IOC_TOTAL_BYTES = 200 * 1024 * 1024
 MAX_IOC_FILE_BYTES = 20 * 1024 * 1024
@@ -42,7 +45,7 @@ CATEGORIES: dict[str, re.Pattern[str]] = {
         re.IGNORECASE,
     ),
     "privilege": re.compile(
-        r"(sudo:|\bsu\[|\b4672\b|\b4720\b|\b4728\b|\b4732\b|added to .*admin|privilege)",
+        r"(sudo:|\bsu\[|\b4672\b|\b4720\b|\b4728\b|\b4732\b|added to .{0,80}admin|privilege)",
         re.IGNORECASE,
     ),
     "web_attack": re.compile(
@@ -65,10 +68,38 @@ BRUTE_FORCE_THRESHOLD = 10
 # ------------------------------------------------------------------ logs_analyze
 class LogsAnalyzeArgs(ToolArgs):
     path: PathArg
-    max_lines: int = Field(default=50_000, ge=100, le=200_000, description="Últimas N líneas")
+    max_lines: int = Field(default=20_000, ge=100, le=100_000, description="Últimas N líneas")
 
 
-def analyze_log_text(lines: list[str]) -> dict[str, object]:
+def _skip_rest_of_line(fh: BinaryIO, piece: bytes) -> None:
+    while piece and not piece.endswith(b"\n"):
+        piece = fh.readline(MAX_LINE_BYTES)
+
+
+def tail_lines(path: Path, *, max_lines: int, max_bytes: int = MAX_LOG_BYTES) -> deque[str]:
+    """Últimas ``max_lines`` líneas de los últimos ``max_bytes`` bytes, con memoria acotada.
+
+    Se lee línea a línea (cada una como mucho ``MAX_LINE_BYTES``; el resto de una línea
+    gigante se descarta) en lugar de cargar y decodificar el archivo entero.
+    """
+    size = path.stat().st_size
+    start = max(0, size - max_bytes)
+    lines: deque[str] = deque(maxlen=max_lines)
+    with path.open("rb") as fh:
+        fh.seek(start)
+        if _is_binary(fh.read(8192)):
+            raise ToolError("El archivo parece binario (¿un .evtx?). Expórtalo a texto.")
+        fh.seek(start)
+        if start:
+            # Se empezó a mitad de una línea: se descarta ese fragmento.
+            _skip_rest_of_line(fh, fh.readline(MAX_LINE_BYTES))
+        while piece := fh.readline(MAX_LINE_BYTES):
+            _skip_rest_of_line(fh, piece)
+            lines.append(decode_text(piece).rstrip("\r\n")[:MAX_LINE_CHARS])
+    return lines
+
+
+def analyze_log_text(lines: list[str] | deque[str]) -> dict[str, object]:
     counts: Counter[str] = Counter()
     samples: dict[str, list[str]] = defaultdict(list)
     ips: Counter[str] = Counter()
@@ -126,15 +157,7 @@ class LogsAnalyzeTool(Tool[LogsAnalyzeArgs]):
             raise ToolError("La ruta no es un archivo.")
 
         def work() -> dict[str, object]:
-            size = path.stat().st_size
-            with path.open("rb") as fh:
-                if size > MAX_LOG_BYTES:
-                    fh.seek(size - MAX_LOG_BYTES)
-                data = fh.read()
-            if _is_binary(data):
-                raise ToolError("El archivo parece binario (¿un .evtx?). Expórtalo a texto.")
-            lines = decode_text(data).splitlines()[-args.max_lines :]
-            return analyze_log_text(lines)
+            return analyze_log_text(tail_lines(path, max_lines=args.max_lines))
 
         report = await anyio.to_thread.run_sync(work)
         counts: dict[str, int] = report["counts"]  # type: ignore[assignment]
@@ -226,15 +249,38 @@ class IocMatchTool(Tool[IocMatchArgs]):
         textual = {v for v, k in indicators.items() if k not in ("md5", "sha1", "sha256")}
         hashes = {v: k for v, k in indicators.items() if k in ("md5", "sha1", "sha256")}
 
+        def scan(path: Path, hits: dict[str, list[str]]) -> None:
+            # Lectura por fragmentos: hash incremental y búsqueda de texto línea a línea.
+            hashers = {kind: hashlib.new(kind) for kind in set(hashes.values())}
+            is_text = bool(textual)
+            first = True
+            number = 1
+            with path.open("rb") as fh:
+                while piece := fh.readline(64 * 1024):
+                    for hasher in hashers.values():
+                        hasher.update(piece)
+                    if first:
+                        is_text = is_text and not _is_binary(piece)
+                        first = False
+                    if is_text:
+                        lowered = decode_text(piece).lower()
+                        for value in textual:
+                            if value in lowered and len(hits[value]) < 10:
+                                hits[value].append(f"{guard.display(path)}:{number}")
+                    if piece.endswith(b"\n"):
+                        number += 1
+            for value, kind in hashes.items():
+                if hashers[kind].hexdigest() == value:
+                    hits[value].append(f"{guard.display(path)} (hash {kind})")
+
         def work() -> tuple[dict[str, list[str]], int]:
             hits: dict[str, list[str]] = defaultdict(list)
             scanned = 0
             total = 0
-            files = [root] if root.is_file() else []
+            files: list[Path] = [root] if root.is_file() else []
             if root.is_dir():
-                for dirpath, dirnames, filenames in os.walk(root):
-                    dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
-                    files += [Path(dirpath) / f for f in filenames]
+                for current, _dirnames, filenames in TreeWalker(root):
+                    files += [current / f for f in filenames]
                     if len(files) > MAX_IOC_FILES:
                         break
             for candidate in files[:MAX_IOC_FILES]:
@@ -247,15 +293,10 @@ class IocMatchTool(Tool[IocMatchArgs]):
                     continue
                 total += size
                 scanned += 1
-                data = path.read_bytes()
-                for value, kind in hashes.items():
-                    if hashlib.new(kind, data).hexdigest() == value:
-                        hits[value].append(f"{guard.display(path)} (hash {kind})")
-                if textual and not _is_binary(data):
-                    for number, line in enumerate(decode_text(data).lower().splitlines(), start=1):
-                        for value in textual:
-                            if value in line and len(hits[value]) < 10:
-                                hits[value].append(f"{guard.display(path)}:{number}")
+                try:
+                    scan(path, hits)
+                except OSError:
+                    continue
             return dict(hits), scanned
 
         hits, scanned = await anyio.to_thread.run_sync(work)
@@ -285,9 +326,33 @@ class NetDiagnoseArgs(ToolArgs):
     )
 
 
+#: Rangos que se consideran «tu red». ``ip.is_private`` es demasiado amplio: incluye
+#: 0.0.0.0/8, rangos de documentación, 6to4/NAT64 o 100.64/10 (CGNAT del operador).
+OWN_NETWORKS = tuple(
+    ipaddress.ip_network(n)
+    for n in (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "127.0.0.0/8",
+        "169.254.0.0/16",
+        "::1/128",
+        "fe80::/10",
+        "fc00::/7",
+    )
+)
+
+
 def _is_own_network(address: str) -> bool:
-    ip = ipaddress.ip_address(address)
-    return ip.is_private or ip.is_loopback or ip.is_link_local
+    try:
+        ip = ipaddress.ip_address(address.split("%", 1)[0])  # quita el «%zona» de IPv6
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.is_unspecified or ip.is_multicast:
+        return False
+    return any(ip.version == net.version and ip in net for net in OWN_NETWORKS)
 
 
 def _listening_ports() -> list[str]:

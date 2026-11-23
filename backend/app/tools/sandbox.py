@@ -44,6 +44,7 @@ class ExecResult:
     truncated: bool
     duration_ms: int
     killed_by_limit: bool = False
+    cancelled: bool = False
 
 
 def minimal_env() -> dict[str, str]:
@@ -122,6 +123,10 @@ if sys.platform == "win32":
     _kernel32.TerminateJobObject.argtypes = (wintypes.HANDLE, wintypes.UINT)
     _kernel32.CloseHandle.restype = wintypes.BOOL
     _kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    _ntdll = ctypes.WinDLL("ntdll")
+    _ntdll.NtResumeProcess.restype = ctypes.c_long  # NTSTATUS
+    _ntdll.NtResumeProcess.argtypes = (wintypes.HANDLE,)
+    _CREATE_SUSPENDED = 0x00000004
 
     def _create_job(memory_mb: int, max_processes: int) -> Any:
         job = _kernel32.CreateJobObjectW(None, None)
@@ -167,15 +172,24 @@ def run_sandboxed(
     max_output_bytes: int = 256 * 1024,
     memory_mb: int = 512,
     max_processes: int = 8,
+    cancel: threading.Event | None = None,
 ) -> ExecResult:
-    """Ejecuta ``argv`` con límites. Bloqueante: llamar desde un hilo."""
+    """Ejecuta ``argv`` con límites. Bloqueante: llamar desde un hilo.
+
+    ``cancel``: si se activa (p. ej. el usuario cancela la respuesta), se mata el proceso
+    y todo su árbol sin esperar al ``timeout``.
+    """
     if not argv:
         raise ValueError("argv vacío")
     start = time.perf_counter()
     kwargs: dict[str, Any] = {}
     job = None
     if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+        # CREATE_SUSPENDED: el proceso no ejecuta nada hasta estar dentro del Job; si no,
+        # podría lanzar hijos que escapen de los límites antes de asignarlo.
+        kwargs["creationflags"] = (
+            subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP | _CREATE_SUSPENDED
+        )
     else:
 
         def _limits() -> None:  # pragma: no cover - solo POSIX
@@ -205,6 +219,9 @@ def run_sandboxed(
             handle = int(process._handle)  # type: ignore[attr-defined]
             if not _kernel32.AssignProcessToJobObject(job, handle):
                 raise OSError(ctypes.get_last_error(), "AssignProcessToJobObject falló")
+            status = _ntdll.NtResumeProcess(handle)
+            if status != 0:
+                raise OSError(status, "NtResumeProcess falló")
         except OSError:
             process.kill()
             process.wait()
@@ -225,16 +242,31 @@ def run_sandboxed(
         t.start()
 
     timed_out = False
+    cancelled = False
+    deadline = time.monotonic() + timeout
     try:
-        process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                break
+            try:
+                process.wait(timeout=min(0.2, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                if cancel is not None and cancel.is_set():
+                    cancelled = True
+                    break
+    except BaseException:
+        cancelled = True
+        raise
     finally:
+        stop = timed_out or cancelled
         if sys.platform == "win32" and job:
-            if timed_out or process.poll() is None:
+            if stop or process.poll() is None:
                 _kernel32.TerminateJobObject(job, 1)
             _kernel32.CloseHandle(job)  # KILL_ON_JOB_CLOSE: mata cualquier proceso restante
-        elif timed_out and sys.platform != "win32":  # pragma: no cover - solo POSIX
+        elif stop and sys.platform != "win32":  # pragma: no cover - solo POSIX
             import signal
 
             os.killpg(process.pid, signal.SIGKILL)
@@ -245,15 +277,17 @@ def run_sandboxed(
     exit_code = process.returncode
     # En Windows, un proceso que supera el límite de memoria del Job termina con un
     # código de error de asignación (o 0xC0000017/0xE0434352 según el runtime).
-    killed_by_limit = not timed_out and exit_code not in (0, None) and _looks_like_oom(err)
+    stopped = timed_out or cancelled
+    killed_by_limit = not stopped and exit_code not in (0, None) and _looks_like_oom(err)
     return ExecResult(
-        exit_code=None if timed_out else exit_code,
+        exit_code=None if stopped else exit_code,
         stdout=b"".join(out).decode("utf-8", errors="replace"),
         stderr=b"".join(err).decode("utf-8", errors="replace"),
         timed_out=timed_out,
         truncated=flags["truncated"],
         duration_ms=round((time.perf_counter() - start) * 1000),
         killed_by_limit=killed_by_limit,
+        cancelled=cancelled,
     )
 
 

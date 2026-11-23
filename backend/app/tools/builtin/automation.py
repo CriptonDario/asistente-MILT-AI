@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import threading
 from typing import Annotated, ClassVar
 
 import anyio.to_thread
@@ -11,11 +13,11 @@ from app.core.errors import ValidationAppError
 from app.modules.automation.scripts import (
     ScriptService,
     build_argv,
+    locked_verified,
     validate_args,
-    verify_integrity,
 )
 from app.tools.base import RiskLevel, Tool, ToolArgs, ToolContext, ToolError, ToolResult, truncate
-from app.tools.sandbox import run_sandboxed
+from app.tools.sandbox import ExecResult, run_sandboxed
 
 
 class ScriptRunArgs(ToolArgs):
@@ -38,13 +40,17 @@ class ScriptRunTool(Tool[ScriptRunArgs]):
     profiles: ClassVar[frozenset[str]] = frozenset({"coder", "security"})
 
     def describe(self, args: ScriptRunArgs) -> str:
-        shown = " ".join(args.args) if args.args else "(sin argumentos)"
-        return f"Ejecutar el script «{args.name}» {shown}"
+        # JSON: los límites entre argumentos quedan claros (un argumento con espacios no
+        # se confunde con dos) en la tarjeta de confirmación.
+        shown = json.dumps(args.args, ensure_ascii=False) if args.args else "(sin argumentos)"
+        return f"Ejecutar el script «{args.name}» con argumentos {shown}"
 
     async def run(self, args: ScriptRunArgs, ctx: ToolContext) -> ToolResult:
         settings = ctx.state.settings
         if settings.profile != "local":
             raise ToolError("La ejecución de scripts solo está disponible en el equipo local.")
+        if ctx.user_role != "admin":
+            raise ToolError("Solo un administrador puede ejecutar scripts.")
         async with ctx.state.sessionmaker() as db:
             service = ScriptService(db, settings)
             script = await service.get_by_name(args.name)
@@ -53,19 +59,33 @@ class ScriptRunTool(Tool[ScriptRunArgs]):
                 raise ToolError(f"No existe el script «{args.name}». Autorizados: {names}.")
         try:
             validate_args(script, args.args)
-            path = await verify_integrity(script)
             argv = build_argv(script, args.args, settings)
         except ValidationAppError as exc:
             raise ToolError(exc.detail or exc.title) from exc
 
-        result = await anyio.to_thread.run_sync(
-            lambda: run_sandboxed(
-                argv,
-                cwd=path.parent,
-                timeout=float(script.timeout_seconds),
-                memory_mb=settings.script_memory_mb,
-            )
-        )
+        cancel = threading.Event()
+
+        def work() -> ExecResult:
+            # El archivo queda bloqueado contra escritura desde la verificación del hash
+            # hasta que termina la ejecución: no se puede cambiar entre medias.
+            with locked_verified(script) as path:
+                return run_sandboxed(
+                    argv,
+                    cwd=path.parent,
+                    timeout=float(script.timeout_seconds),
+                    memory_mb=settings.script_memory_mb,
+                    cancel=cancel,
+                )
+
+        try:
+            # abandon_on_cancel: si se cancela la respuesta, no se espera al hilo; el
+            # evento hace que el sandbox mate el proceso en menos de un segundo.
+            result = await anyio.to_thread.run_sync(work, abandon_on_cancel=True)
+        except ValidationAppError as exc:
+            raise ToolError(exc.detail or exc.title) from exc
+        except BaseException:
+            cancel.set()
+            raise
         if result.timed_out:
             status = f"cancelado tras {script.timeout_seconds} s"
         elif result.killed_by_limit:

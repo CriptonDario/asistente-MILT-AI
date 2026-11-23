@@ -29,7 +29,7 @@ class FakeTranscriber:
     def __init__(self) -> None:
         self.calls: list[tuple[Path, str]] = []
 
-    def transcribe(self, path: Path, language: str) -> str:
+    def transcribe(self, path: Path, language: str, *, kind: str, max_seconds: float) -> str:
         self.calls.append((path, language))
         return "hola milt"
 

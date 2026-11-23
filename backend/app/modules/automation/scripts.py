@@ -8,7 +8,8 @@ import re
 import shutil
 import sys
 import uuid
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
 import anyio.to_thread
@@ -22,7 +23,8 @@ from app.modules.automation.models import AutomationScript
 from app.tools.fs_guard import check_sensitive
 
 #: Por defecto: letras, números y separadores comunes. Sin comillas, ; | & $ ` < > ( ).
-DEFAULT_ARG_PATTERN = r"^[\w.,:@/\\ =+-]{0,200}$"
+#: Tampoco puede empezar por «-»: el script recibiría opciones en lugar de datos.
+DEFAULT_ARG_PATTERN = r"^(?!-)[\w.,:@/\\ =+-]{0,200}$"
 RUNNERS = {".py": "python", ".ps1": "powershell", ".exe": "exe"}
 
 
@@ -32,6 +34,71 @@ def sha256_file(path: Path) -> str:
         while chunk := fh.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _sha256_fd(fd: int) -> str:
+    digest = hashlib.sha256()
+    os.lseek(fd, 0, os.SEEK_SET)
+    while chunk := os.read(fd, 1024 * 1024):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _open_deny_write(path: Path) -> int:
+    """Abre ``path`` impidiendo que nadie lo modifique, renombre o borre mientras siga abierto.
+
+    Windows: ``CreateFileW`` con ``FILE_SHARE_READ`` solamente. El intérprete puede leer
+    el script, pero ningún otro proceso puede cambiarlo entre la verificación del hash y
+    la ejecución (TOCTOU). Devuelve un descriptor que hay que cerrar con ``os.close``.
+    """
+    if sys.platform != "win32":
+        return os.open(path, os.O_RDONLY)
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    generic_read, file_share_read, open_existing, attribute_normal = 0x80000000, 1, 3, 0x80
+    handle = kernel32.CreateFileW(
+        str(path), generic_read, file_share_read, None, open_existing, attribute_normal, None
+    )
+    if handle is None or handle == wintypes.HANDLE(-1).value:
+        error = ctypes.get_last_error()
+        if error == 32:  # ERROR_SHARING_VIOLATION
+            raise ValidationAppError(
+                "El script está abierto para escritura por otro programa; ciérralo y reintenta."
+            )
+        raise ValidationAppError(f"No se pudo abrir el script (error {error}).")
+    # O_BINARY: sin él, os.read traduciría \r\n y el hash no coincidiría.
+    return msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+
+
+@contextmanager
+def locked_verified(script: AutomationScript) -> Iterator[Path]:
+    """Bloquea el archivo, comprueba su hash y lo mantiene bloqueado mientras se ejecuta."""
+    path = Path(script.path)
+    if not path.is_file():
+        raise ValidationAppError(f"El script «{script.name}» ya no existe en {script.path}.")
+    fd = _open_deny_write(path)
+    try:
+        if _sha256_fd(fd) != script.sha256:
+            raise ValidationAppError(
+                f"El script «{script.name}» ha cambiado desde que se autorizó. Un administrador "
+                "debe revisarlo y volver a autorizarlo."
+            )
+        yield path
+    finally:
+        os.close(fd)
 
 
 def _powershell() -> str:
@@ -75,20 +142,6 @@ def validate_args(script: AutomationScript, args: Sequence[str]) -> None:
     for arg in args:
         if not pattern.fullmatch(arg):
             raise ValidationAppError(f"Argumento no permitido para «{script.name}»: {arg[:60]!r}")
-
-
-async def verify_integrity(script: AutomationScript) -> Path:
-    """El archivo debe existir y conservar el hash registrado (si cambió, se bloquea)."""
-    path = Path(script.path)
-    if not path.is_file():
-        raise ValidationAppError(f"El script «{script.name}» ya no existe en {script.path}.")
-    current = await anyio.to_thread.run_sync(sha256_file, path)
-    if current != script.sha256:
-        raise ValidationAppError(
-            f"El script «{script.name}» ha cambiado desde que se autorizó. Un administrador "
-            "debe revisarlo y volver a autorizarlo."
-        )
-    return path
 
 
 class ScriptService:

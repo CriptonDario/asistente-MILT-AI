@@ -107,6 +107,9 @@ class Settings(BaseSettings):
     voice_stt_model: str = "base"
     voice_language: str = "es"
     voice_max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
+    #: Duración máxima del audio decodificado. 10 MB de Opus pueden ser horas de audio:
+    #: sin este tope, decodificarlo agotaría la RAM y la CPU.
+    voice_max_seconds: int = Field(default=120, ge=5, le=1800)
 
     #: Parseo en un subproceso con límite de tiempo (aísla archivos maliciosos).
     parse_isolated: bool = True

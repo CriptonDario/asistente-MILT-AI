@@ -67,13 +67,48 @@ def _is_within(path: Path, root: Path) -> bool:
     return True
 
 
+#: Nombres de dispositivo de Windows: «NUL.txt» o «con» no son archivos normales.
+RESERVED_DEVICE_NAMES = frozenset(
+    {"con", "prn", "aux", "nul", "conin$", "conout$"}
+    | {f"com{i}" for i in range(1, 10)}
+    | {f"lpt{i}" for i in range(1, 10)}
+    | {"com¹", "com²", "com³", "lpt¹", "lpt²", "lpt³"}
+)
+
+
+def _normalized(part: str) -> str:
+    # Windows ignora los puntos y espacios finales: «.env.» y «id_rsa » son «.env» e «id_rsa».
+    return part.rstrip(". ").lower() or part.lower()
+
+
 def check_sensitive(path: Path) -> None:
     for part in path.parts:
-        lowered = part.lower()
-        if lowered in SENSITIVE_NAMES or _ENV_NAME.match(part):
+        lowered = _normalized(part)
+        if lowered in SENSITIVE_NAMES or _ENV_NAME.match(lowered):
             raise ToolError(f"Acceso denegado: «{part}» es un archivo o carpeta sensible.")
-    if path.suffix.lower() in SENSITIVE_SUFFIXES:
+    if Path(_normalized(path.name)).suffix in SENSITIVE_SUFFIXES:
         raise ToolError("Acceso denegado: los archivos de claves y certificados están protegidos.")
+
+
+def check_component_names(path: Path) -> None:
+    """Rechaza nombres que Windows reinterpreta (punto/espacio final, CON, NUL, COM1…)."""
+    for part in path.parts[1:] if path.is_absolute() else path.parts:
+        if part in (".", ".."):
+            continue
+        if part != part.rstrip(". "):
+            raise ToolError(f"Nombre no válido: «{part}» termina en punto o espacio.")
+        if part.split(".", 1)[0].strip().lower() in RESERVED_DEVICE_NAMES:
+            raise ToolError(f"Nombre no válido: «{part}» es un nombre reservado de Windows.")
+
+
+def check_writable(path: Path, root: Path) -> None:
+    """Restricciones extra para escribir: nada dentro de .git ni archivos internos de MILT."""
+    rel = path.relative_to(root) if _is_within(path, root) else path
+    for part in rel.parts:
+        if _normalized(part) in {".git", ".hg", ".svn"}:
+            raise ToolError("Acceso denegado: no se escribe dentro de la carpeta del repositorio.")
+    if path.name.lower().endswith((".milt.bak", ".milt.tmp")):
+        raise ToolError("Acceso denegado: archivo interno de copias de MILT.")
 
 
 def validate_root(raw: str, *, data_dir: Path) -> Path:
@@ -125,6 +160,7 @@ class FsGuard:
         if ":" in raw[2:]:
             raise ToolError("Ruta no válida.")
         path = Path(raw).expanduser()
+        check_component_names(path)
         if not path.is_absolute():
             path = self.roots[0] / path
         try:
@@ -141,6 +177,14 @@ class FsGuard:
         if _is_within(resolved, self.data_dir):
             raise ToolError("Acceso denegado: carpeta interna de MILT.")
         check_sensitive(resolved)
+        return resolved
+
+    def resolve_for_write(self, raw: str) -> Path:
+        """Como ``resolve`` (sin exigir que exista) más las restricciones de escritura."""
+        resolved = self.resolve(raw, must_exist=False)
+        check_component_names(resolved)
+        root = next(r for r in self.roots if _is_within(resolved, r))
+        check_writable(resolved, root)
         return resolved
 
     def display(self, path: Path) -> str:

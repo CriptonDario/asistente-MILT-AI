@@ -21,12 +21,14 @@ dependencies = [
     "python-docx>=1.1",
     "openpyxl>=3.1",
     "python-multipart>=0.0.9",
+    "regex>=2024.5",
 ]
 
 [project.optional-dependencies]
 # Perfil servidor (PostgreSQL). No se necesita en local.
 server = ["asyncpg>=0.29"]
 voice = [
+    "av>=12,<16",
     "faster-whisper>=1.0",
 ]
 
@@ -37,6 +39,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "types-openpyxl>=3.1.5.20261122",
+    "types-regex>=2026.11.19.20261122",
 ]
 
 [tool.uv]

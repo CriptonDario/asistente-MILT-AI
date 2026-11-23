@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import fnmatch
 import os
-import re
+import secrets
+import time
 from collections import Counter
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, ClassVar
 
 import anyio.to_thread
+import regex
 from pydantic import ConfigDict, Field
 
 from app.modules.documents.parsers import decode_text
@@ -24,6 +27,12 @@ MAX_TREE_ENTRIES = 400
 MAX_SEARCH_FILES = 5000
 MAX_SEARCH_MATCHES = 150
 MAX_SEARCH_FILE_BYTES = 1024 * 1024
+MAX_SEARCH_LINE_CHARS = 2000
+#: Tiempo máximo de una búsqueda por línea y de la búsqueda completa. Las expresiones
+#: regulares las escribe el modelo: una catastrófica, p. ej. ``(a|aa)+$``, no debe
+#: bloquear el servidor (``regex`` acepta un ``timeout`` y libera el GIL).
+REGEX_LINE_TIMEOUT = 0.25
+SEARCH_BUDGET_SECONDS = 20.0
 SKIP_DIRS = frozenset(
     {
         ".git",
@@ -81,6 +90,68 @@ PathArg = Annotated[
 
 def _guard(ctx: ToolContext) -> FsGuard:
     return FsGuard(ctx.allowed_roots, data_dir=ctx.state.settings.data_dir)
+
+
+MAX_WALK_ENTRIES = 200_000
+
+
+class TreeWalker:
+    """Recorrido en profundidad, como ``os.walk`` pero más estricto.
+
+    No sigue enlaces simbólicos ni *junctions* (``os.walk`` sí entra en las junctions de
+    Windows, que pueden apuntar fuera de la carpeta autorizada o formar ciclos), salta
+    ``SKIP_DIRS`` y las carpetas ocultas y se detiene tras ``max_entries`` entradas.
+    """
+
+    def __init__(self, root: Path, *, max_entries: int = MAX_WALK_ENTRIES) -> None:
+        self.root = root
+        self.max_entries = max_entries
+        self.visited = 0
+        self.truncated = False
+
+    def __iter__(self) -> Iterator[tuple[Path, list[str], list[str]]]:
+        stack = [self.root]
+        while stack:
+            current = stack.pop()
+            dirnames: list[str] = []
+            filenames: list[str] = []
+            try:
+                with os.scandir(current) as entries:
+                    for entry in entries:
+                        self.visited += 1
+                        if self.visited > self.max_entries:
+                            self.truncated = True
+                            break
+                        try:
+                            if entry.is_symlink() or entry.is_junction():
+                                continue
+                            if entry.is_dir(follow_symlinks=False):
+                                if entry.name not in SKIP_DIRS and not entry.name.startswith("."):
+                                    dirnames.append(entry.name)
+                            elif entry.is_file(follow_symlinks=False):
+                                filenames.append(entry.name)
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+            dirnames.sort()
+            filenames.sort()
+            yield current, dirnames, filenames  # el llamador puede podar dirnames
+            if self.truncated:
+                return
+            stack.extend(current / name for name in reversed(dirnames))
+
+
+def _write_exclusive(path: Path, data: bytes) -> None:
+    """Crea ``path`` (falla si ya existe, aunque sea un enlace) y escribe ``data``."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def _is_binary(sample: bytes) -> bool:
@@ -222,12 +293,8 @@ class ProjectTreeTool(Tool[ProjectTreeArgs]):
             lines: list[str] = []
             languages: Counter[str] = Counter()
             files = 0
-            for dirpath, dirnames, filenames in os.walk(root):
-                current = Path(dirpath)
+            for current, dirnames, filenames in TreeWalker(root):
                 depth = len(current.relative_to(root).parts)
-                dirnames[:] = sorted(
-                    d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")
-                )
                 for name in filenames:
                     files += 1
                     language = LANGUAGES.get(Path(name).suffix.lower())
@@ -238,7 +305,7 @@ class ProjectTreeTool(Tool[ProjectTreeArgs]):
                 if len(lines) < MAX_TREE_ENTRIES:
                     indent = "  " * depth
                     lines.append(f"{indent}{current.name}/")
-                    for name in sorted(filenames)[:30]:
+                    for name in filenames[:30]:
                         if len(lines) >= MAX_TREE_ENTRIES:
                             break
                         lines.append(f"{indent}  {name}")
@@ -290,29 +357,31 @@ class CodeSearchTool(Tool[CodeSearchArgs]):
     async def run(self, args: CodeSearchArgs, ctx: ToolContext) -> ToolResult:
         guard = _guard(ctx)
         root = guard.resolve(args.path)
-        flags = 0 if args.case_sensitive else re.IGNORECASE
+        flags = regex.V0 if args.case_sensitive else regex.V0 | regex.IGNORECASE
         try:
-            pattern = re.compile(args.query if args.regex else re.escape(args.query), flags)
-        except re.error as exc:
+            pattern = regex.compile(args.query if args.regex else regex.escape(args.query), flags)
+        except regex.error as exc:
             raise ToolError(f"Expresión regular no válida: {exc}") from exc
 
-        def work() -> tuple[list[str], int]:
+        def work() -> tuple[list[str], int, str]:
             matches: list[str] = []
             scanned = 0
-            targets = [root] if root.is_file() else None
-            walker = ((str(root.parent), [], [root.name]),) if targets else os.walk(root)
-            for dirpath, dirnames, filenames in walker:
-                dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
+            deadline = time.monotonic() + SEARCH_BUDGET_SECONDS
+            single: list[tuple[Path, list[str], list[str]]] = [(root.parent, [], [root.name])]
+            walker: Iterator[tuple[Path, list[str], list[str]]] | TreeWalker = (
+                iter(single) if root.is_file() else TreeWalker(root)
+            )
+            for current, _dirnames, filenames in walker:
                 for name in filenames:
                     if not fnmatch.fnmatch(name, args.file_glob):
                         continue
                     scanned += 1
                     if scanned > MAX_SEARCH_FILES:
-                        return matches, scanned
+                        return matches, scanned, "límite de archivos alcanzado"
                     try:
                         # Cada archivo se valida: un enlace simbólico dentro del proyecto
                         # podría apuntar fuera de las carpetas autorizadas.
-                        path = guard.resolve(str(Path(dirpath) / name))
+                        path = guard.resolve(str(current / name))
                     except ToolError:
                         continue
                     try:
@@ -324,21 +393,38 @@ class CodeSearchTool(Tool[CodeSearchArgs]):
                     if _is_binary(data):
                         continue
                     for number, line in enumerate(decode_text(data).splitlines(), start=1):
-                        if len(line) > 2000:
-                            line = line[:2000]
-                        if pattern.search(line):
+                        line = line[:MAX_SEARCH_LINE_CHARS]
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            return matches, scanned, "tiempo de búsqueda agotado"
+                        try:
+                            found = pattern.search(
+                                line, timeout=min(REGEX_LINE_TIMEOUT, remaining), concurrent=True
+                            )
+                        except TimeoutError:
+                            return (
+                                matches,
+                                scanned,
+                                "la expresión regular es demasiado costosa; simplifícala",
+                            )
+                        if found:
                             matches.append(f"{guard.display(path)}:{number}: {line.strip()[:240]}")
                             if len(matches) >= MAX_SEARCH_MATCHES:
-                                return matches, scanned
-            return matches, scanned
+                                return matches, scanned, "límite de coincidencias alcanzado"
+            if isinstance(walker, TreeWalker) and walker.truncated:
+                return matches, scanned, "carpeta demasiado grande, recorrido parcial"
+            return matches, scanned, ""
 
-        matches, scanned = await anyio.to_thread.run_sync(work)
+        matches, scanned, stopped = await anyio.to_thread.run_sync(work)
+        note = f" (búsqueda detenida: {stopped})" if stopped else ""
         if not matches:
             return ToolResult(
-                content=f"Sin coincidencias para «{args.query}» ({scanned} archivos revisados).",
-                summary="Sin coincidencias",
+                content=(
+                    f"Sin coincidencias para «{args.query}» ({scanned} archivos revisados){note}."
+                ),
+                summary="Sin coincidencias" + note,
             )
-        extra = " (límite alcanzado)" if len(matches) >= MAX_SEARCH_MATCHES else ""
+        extra = note
         return ToolResult(
             content=truncate(f"{len(matches)} coincidencias{extra}:\n" + "\n".join(matches)),
             summary=f"{len(matches)} coincidencias en {scanned} archivos",
@@ -373,7 +459,7 @@ class FileWriteTool(Tool[FileWriteArgs]):
 
     async def run(self, args: FileWriteArgs, ctx: ToolContext) -> ToolResult:
         guard = _guard(ctx)
-        target = guard.resolve(args.path, must_exist=False)
+        target = guard.resolve_for_write(args.path)
         if not target.parent.is_dir():
             raise ToolError("La carpeta de destino no existe.")
         existed = target.exists()
@@ -384,13 +470,24 @@ class FileWriteTool(Tool[FileWriteArgs]):
 
         def work() -> None:
             if existed:
-                # Copia de seguridad antes de reemplazar.
+                # Copia de seguridad antes de reemplazar. Si alguien dejó un enlace con el
+                # nombre de la copia, se elimina el enlace (no se escribe a través de él).
                 backup = target.with_name(target.name + ".milt.bak")
-                backup.write_bytes(target.read_bytes())
-            temp = target.with_name(target.name + ".milt.tmp")
-            # newline="": sin traducir \n a \r\n en Windows (se respeta lo que pide el usuario).
-            temp.write_text(args.content, encoding="utf-8", newline="")
-            temp.replace(target)
+                if backup.is_symlink() or backup.is_junction():
+                    backup.unlink()
+                elif backup.exists() and not backup.is_file():
+                    raise ToolError("La copia de seguridad .milt.bak no es un archivo.")
+                backup.unlink(missing_ok=True)
+                _write_exclusive(backup, target.read_bytes())
+            # Nombre temporal aleatorio creado con O_EXCL: no se sigue ningún enlace preparado.
+            temp = target.with_name(f".{target.name}.{secrets.token_hex(6)}.milt.tmp")
+            # Sin traducir \n a \r\n en Windows (se respeta lo que pide el usuario).
+            _write_exclusive(temp, args.content.encode("utf-8"))
+            try:
+                temp.replace(target)
+            except BaseException:
+                temp.unlink(missing_ok=True)
+                raise
 
         await anyio.to_thread.run_sync(work)
         verb = "Reemplazado (copia en .milt.bak)" if existed else "Creado"

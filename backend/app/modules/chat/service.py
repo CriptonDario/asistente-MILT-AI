@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import math
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine
@@ -28,7 +29,7 @@ from app.llm.base import (
     ToolCallRequest,
     Usage,
 )
-from app.llm.tokens import estimate_message_tokens, estimate_tokens
+from app.llm.tokens import CHARS_PER_TOKEN, estimate_message_tokens, estimate_tokens
 from app.modules.automation.scripts import ScriptService
 from app.modules.chat.augment import Augmentation, gather_context
 from app.modules.chat.context_builder import BuiltContext, build_context, output_reserve
@@ -357,6 +358,9 @@ class ChatService:
         messages = list(prepared.messages)
         settings = self.settings
         max_calls = settings.agent_max_tool_calls
+        offered = frozenset(
+            spec["function"]["name"] for spec in prepared.tool_specs if "function" in spec
+        )
 
         try:
             # Bucle del agente: el modelo responde o pide herramientas; sus resultados se
@@ -409,9 +413,7 @@ class ChatService:
                     ChatMessage(
                         role="assistant",
                         content="".join(round_parts),
-                        tool_calls=[
-                            {"function": {"name": c.name, "arguments": c.arguments}} for c in calls
-                        ],
+                        tool_calls=_history_tool_calls(calls),
                     )
                 )
                 for call in calls:
@@ -433,6 +435,7 @@ class ChatService:
                         overrides=prepared.tool_policies,
                         can_confirm=req.can_confirm,
                         message_id=assistant_id,
+                        allowed_tools=offered,
                     )
                     tool_log.append(
                         {
@@ -579,17 +582,42 @@ def _compact_tool_results(messages: list[ChatMessage], budget: int) -> list[Chat
         if total <= budget:
             break
         message = out[index]
-        short = message.content[:300] + "\n… [resultado anterior acortado para ahorrar contexto]"
-        total -= estimate_message_tokens(message) - estimate_tokens(short)
-        out[index] = ChatMessage(role="tool", tool_name=message.tool_name, content=short)
+        if len(message.content) <= 400:
+            continue
+        short = ChatMessage(
+            role="tool",
+            tool_name=message.tool_name,
+            content=message.content[:300]
+            + "\n… [resultado anterior acortado para ahorrar contexto]",
+        )
+        total += estimate_message_tokens(short) - estimate_message_tokens(message)
+        out[index] = short
     if total > budget and tool_indexes:
         last = out[tool_indexes[-1]]
-        keep = max(400, int(len(last.content) * budget / max(total, 1)))
-        out[tool_indexes[-1]] = ChatMessage(
-            role="tool",
-            tool_name=last.tool_name,
-            content=last.content[:keep] + "\n… [recortado para caber en el contexto]",
-        )
+        marker = "\n… [recortado para caber en el contexto]"
+        # Se quita exactamente lo que sobra (más el marcador), no una proporción.
+        excess_chars = math.ceil((total - budget) * CHARS_PER_TOKEN) + len(marker)
+        keep = max(400, len(last.content) - excess_chars)
+        if keep < len(last.content):
+            out[tool_indexes[-1]] = ChatMessage(
+                role="tool", tool_name=last.tool_name, content=last.content[:keep] + marker
+            )
+    return out
+
+
+def _history_tool_calls(calls: list[ToolCallRequest]) -> list[dict[str, Any]]:
+    """Llamadas tal como quedan en el contexto: sin repetir contenidos enormes.
+
+    El contenido de un ``file_write`` (hasta 200 000 caracteres) ya cumplió su función;
+    reenviarlo en cada vuelta llenaría el contexto del modelo.
+    """
+    out: list[dict[str, Any]] = []
+    for call in calls:
+        arguments = dict(call.arguments) if isinstance(call.arguments, dict) else {}
+        for key, value in arguments.items():
+            if isinstance(value, str) and len(value) > 500:
+                arguments[key] = f"[{len(value)} caracteres omitidos]"
+        out.append({"function": {"name": call.name, "arguments": arguments}})
     return out
 
 

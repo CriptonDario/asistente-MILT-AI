@@ -49,6 +49,8 @@ function invalidate(...keys: (readonly unknown[])[]) {
 // ------------------------------------------------------------------ carpetas
 function RootsSection() {
   const roots = useToolRoots();
+  // Autorizar una carpeta da acceso a todo su contenido: solo lo hace un administrador.
+  const isAdmin = useSession((s) => s.user?.role === "admin");
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -86,32 +88,44 @@ function RootsSection() {
             <span className="min-w-0 flex-1 truncate font-mono text-xs" title={root}>
               {root}
             </span>
-            <IconButton
-              label="Quitar carpeta"
-              className="size-7"
-              disabled={saving}
-              onClick={() => void save(current.filter((r) => r !== root))}
-            >
-              <X className="size-3.5" />
-            </IconButton>
+            {isAdmin && (
+              <IconButton
+                label="Quitar carpeta"
+                className="size-7"
+                disabled={saving}
+                onClick={() => void save(current.filter((r) => r !== root))}
+              >
+                <X className="size-3.5" />
+              </IconButton>
+            )}
           </li>
         ))}
         {!roots.isLoading && current.length === 0 && (
           <li className="text-sm text-muted">Ninguna todavía.</li>
         )}
       </ul>
-      <form onSubmit={add} className="flex gap-2">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="C:\laragon\www\mi-proyecto"
-          aria-label="Nueva carpeta autorizada"
-          className={cn(field, "font-mono text-xs")}
-        />
-        <Button type="submit" size="sm" icon={<FolderPlus className="size-3.5" />} disabled={saving || !draft.trim()}>
-          Añadir
-        </Button>
-      </form>
+      {!isAdmin && (
+        <p className="text-xs text-muted">Solo un administrador puede autorizar carpetas.</p>
+      )}
+      {isAdmin && (
+        <form onSubmit={add} className="flex gap-2">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="C:\laragon\www\mi-proyecto"
+            aria-label="Nueva carpeta autorizada"
+            className={cn(field, "font-mono text-xs")}
+          />
+          <Button
+            type="submit"
+            size="sm"
+            icon={<FolderPlus className="size-3.5" />}
+            disabled={saving || !draft.trim()}
+          >
+            Añadir
+          </Button>
+        </form>
+      )}
       {error && <p className="text-xs text-danger">{error}</p>}
     </PanelSection>
   );
