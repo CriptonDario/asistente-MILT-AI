@@ -47,6 +47,7 @@ class FakeLLMProvider:
         self.closed = False
         self.embed_calls = 0
         self.embed_fail_with: Exception | None = None
+        self.embed_delay = 0.0
 
     async def health(self) -> ProviderHealth:
         return ProviderHealth(ok=True, provider=self.name, version="fake", latency_ms=0)
@@ -96,6 +97,8 @@ class FakeLLMProvider:
         Determinista y sin modelo, suficiente para probar la recuperación semántica.
         """
         self.embed_calls += 1
+        if self.embed_delay:
+            await asyncio.sleep(self.embed_delay)
         if self.embed_fail_with is not None:
             raise self.embed_fail_with
         vectors = []

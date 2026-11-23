@@ -47,8 +47,12 @@ def setup(
 
 
 def system_prompt(llm: FakeLLMProvider) -> str:
-    content: str = llm.calls[-1]["messages"][0].content
-    return content
+    """Todo lo que recibió el modelo en el último turno (sistema + mensajes).
+
+    Los recuerdos van en el mensaje de sistema y los fragmentos de documentos en el del
+    usuario (ver test_review4_fixes para la separación exacta).
+    """
+    return "\n".join(m.content for m in llm.calls[-1]["messages"])
 
 
 def test_attached_document_is_used_and_cited(client_factory: Callable[..., TestClient]) -> None:

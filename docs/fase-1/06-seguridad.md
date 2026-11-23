@@ -55,6 +55,15 @@ Controles:
 7. **Defensa ante inyección de prompt:** el contenido de documentos y de resultados de herramientas se envuelve como *datos no confiables* y el prompt de sistema indica no obedecer instrucciones que vengan de ahí. Además, ninguna acción sensible se ejecuta sin confirmación, **aunque el modelo sea engañado**. La seguridad no depende de que el modelo "se porte bien".
 8. **Ciberseguridad responsable:** las herramientas de red se limitan al **propio equipo y a la red local configurada por el usuario** (rangos privados RFC 1918 declarados en ajustes), sin escaneo de terceros.
 
+### 4.1 Memoria y documentos (Fase 4)
+
+- **Fragmentos de documentos = datos no confiables.** Nunca van en el mensaje de sistema: se insertan en el mensaje del usuario entre marcas `<<<DOC {nonce}>>> … <<<FIN {nonce}>>>`, con un nonce aleatorio por turno. Así el contenido no puede cerrar el bloque ni hacerse pasar por instrucciones del sistema. Los **recuerdos** (aprobados por el usuario) sí van en el sistema.
+- **Recursos acotados en la ingesta:** presupuesto de caracteres extraídos (`max_document_chunks × chunk_chars`), máximo de 200 000 caracteres por bloque, ZIP de ≤ 50 MB descomprimidos y ratio ≤ 150, y parseo en un **subproceso con límite de tiempo** (`MILT_PARSE_TIMEOUT_SECONDS`). Un PDF de pocos KB que se expande a millones de caracteres se corta en la primera página.
+- **Cuotas por usuario:** documentos, bytes y fragmentos indexados (Qdrant embebido guarda los vectores en RAM).
+- **Sin bloqueos de escritura durante llamadas externas:** nunca se espera a Ollama ni a Qdrant con una transacción de escritura de SQLite abierta.
+- **Sugerencias de memoria:** se descartan si parecen secretos (contraseñas, claves, PIN, IBAN, CVV, tarjetas validadas con Luhn, prefijos de tokens `sk-`, `ghp_`, `AKIA`, JWT…). Nada se guarda sin aprobación.
+- **Borrado de usuario:** además de la cascada SQL, se eliminan sus vectores y sus archivos. Al arrancar se barren los archivos huérfanos.
+
 ## 5. Validación de entradas e inyección
 
 - **SQL:** solo ORM y consultas parametrizadas de SQLAlchemy, nunca concatenación de texto. Las consultas FTS se escapan mediante el repositorio.

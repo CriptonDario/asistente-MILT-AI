@@ -87,7 +87,13 @@ class Settings(BaseSettings):
     embedding_model: str = "nomic-embed-text"
     embedding_batch_size: int = Field(default=16, ge=1, le=256)
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, ge=1024)
-    max_document_chunks: int = Field(default=2000, ge=1)
+    max_document_chunks: int = Field(default=1000, ge=1)
+    #: Total de fragmentos por usuario. Qdrant embebido guarda todo en RAM (~3 KB/vector).
+    max_chunks_per_user: int = Field(default=20_000, ge=1)
+    max_documents_per_user: int = Field(default=200, ge=1)
+    #: Parseo en un subproceso con límite de tiempo (aísla archivos maliciosos).
+    parse_isolated: bool = True
+    parse_timeout_seconds: float = Field(default=120.0, gt=0)
     chunk_chars: int = Field(default=2000, ge=200)
     chunk_overlap_chars: int = Field(default=250, ge=0)
     rag_top_k: int = Field(default=4, ge=1, le=20)

@@ -42,9 +42,40 @@ Si no hay nada que recordar, responde [].
 CONVERSACIÓN:
 {transcript}"""
 
-_SECRET_PATTERN = re.compile(
-    r"(contraseñ|password|passwd|token|api[_ -]?key|secret|\b\d{13,19}\b)", re.IGNORECASE
+_SECRET_WORDS = re.compile(
+    r"(contrase[nñ]a|password|passwd|\bclaves?\b|\bpin\b|\biban\b|\bcvv\b|\bcvc\b|"
+    r"token|api[_ -]?key|secret|credencial|\bseed\b|semilla|mnem[oó]nic)",
+    re.IGNORECASE,
 )
+# Prefijos habituales de claves de API y tokens (OpenAI, GitHub, AWS, Slack, JWT...).
+_TOKEN_PATTERN = re.compile(
+    r"(\bsk-[A-Za-z0-9_-]{10,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\bAKIA[0-9A-Z]{16}\b|"
+    r"\bxox[abpr]-[A-Za-z0-9-]{10,}|\beyJ[A-Za-z0-9_-]{10,}\.)"
+)
+_DIGIT_RUN = re.compile(r"(?:\d[ -]?){13,19}")
+
+
+def _luhn_ok(digits: str) -> bool:
+    total = 0
+    for index, char in enumerate(reversed(digits)):
+        value = int(char)
+        if index % 2 == 1:
+            value *= 2
+            if value > 9:
+                value -= 9
+        total += value
+    return total % 10 == 0
+
+
+def looks_sensitive(text: str) -> bool:
+    """Heurística conservadora: ante la duda, no se propone como recuerdo."""
+    if _SECRET_WORDS.search(text) or _TOKEN_PATTERN.search(text):
+        return True
+    for match in _DIGIT_RUN.finditer(text):
+        digits = re.sub(r"\D", "", match.group())
+        if 13 <= len(digits) <= 19 and _luhn_ok(digits):
+            return True
+    return False
 
 
 def parse_suggestions(raw: str) -> list[dict[str, str]]:
@@ -65,7 +96,7 @@ def parse_suggestions(raw: str) -> list[dict[str, str]]:
             continue
         content = str(item.get("content", "")).strip()
         kind = str(item.get("kind", "fact")).strip().lower()
-        if not 4 <= len(content) <= 500 or _SECRET_PATTERN.search(content):
+        if not 4 <= len(content) <= 500 or looks_sensitive(content):
             continue
         out.append({"content": content, "kind": kind if kind in VALID_KINDS else "fact"})
         if len(out) >= MAX_SUGGESTIONS:

@@ -19,10 +19,18 @@ class Chunk:
 
 
 def merge_locators(first: dict[str, Any], last: dict[str, Any]) -> dict[str, Any]:
-    """``{page: 3}`` + ``{page: 5}`` -> ``{page: 3, page_end: 5}``."""
+    """``{page: 3}`` + ``{page: 5}`` -> ``{page: 3, page_end: 5}``.
+
+    - Entre hojas distintas solo se citan las hojas (un rango de filas no tendría sentido).
+    - Claves que solo aparecen al final (párrafo -> tabla) se conservan tal cual.
+    """
+    if "sheet" in first and "sheet" in last and first["sheet"] != last["sheet"]:
+        return {"sheet": first["sheet"], "sheet_end": last["sheet"]}
     merged = dict(first)
     for key, value in last.items():
-        if merged.get(key) != value:
+        if key not in first:
+            merged[key] = value
+        elif first[key] != value:
             merged[f"{key}_end"] = value
     return merged
 

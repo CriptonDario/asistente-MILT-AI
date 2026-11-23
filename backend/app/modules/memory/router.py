@@ -79,6 +79,8 @@ async def extract_from_conversation(
     body: ExtractRequest, state: StateDep, auth: AuthDep
 ) -> ExtractResult:
     """Pide al modelo que proponga recuerdos de una conversación (quedan como sugerencias)."""
+    # Cada extracción es una generación completa del modelo: se limita el ritmo.
+    await state.rate_limiter.hit(f"memory-extract:{auth.user.id}", limit=3, window_seconds=60)
     created, skipped = await extract_suggestions(state, auth.user.id, body.conversation_id)
     return ExtractResult(created=[to_out(m) for m in created], skipped_duplicates=skipped)
 

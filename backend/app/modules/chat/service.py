@@ -18,6 +18,7 @@ from app.core.ids import uuid7
 from app.core.state import AppState
 from app.llm.base import (
     ChatMessage,
+    ContextOverflowError,
     Done,
     GenerationParams,
     TextDelta,
@@ -25,13 +26,14 @@ from app.llm.base import (
     ToolCallRequest,
     Usage,
 )
-from app.modules.chat.augment import gather_context
-from app.modules.chat.context_builder import build_context, output_reserve
+from app.modules.chat.augment import Augmentation, gather_context
+from app.modules.chat.context_builder import BuiltContext, build_context, output_reserve
 from app.modules.conversations import repository as conv_repo
 from app.modules.conversations.models import Message
 from app.modules.conversations.service import title_from_text
 from app.modules.documents.models import MessageAttachment
 from app.modules.documents.service import DocumentService
+from app.modules.memory.service import MemoryService
 from app.modules.settings.models import UserSettings
 from app.modules.settings.service import base_generation_params
 
@@ -149,7 +151,14 @@ class ChatService:
                     [*await conv_repo.conversation_document_ids(db, conv.id), *new_attachments]
                 )
             )
-            use_memory = req.use_memory and (prefs.memory_enabled if prefs else True)
+            # Sin recuerdos no se calcula el embedding de la pregunta (ahorra una llamada
+            # a Ollama, y quizá un cambio de modelo en memoria, en cada turno).
+            use_memory = (
+                req.use_memory
+                and (prefs.memory_enabled if prefs else True)
+                and await MemoryService(db, self.state).has_active(req.user_id)
+            )
+            base_prompt = build_system_prompt(conv.agent_profile, user_name=req.user_name)
 
         # --- 2. Recuperación de contexto (memoria + documentos) -----------------------
         num_ctx = params.num_ctx or self.settings.default_num_ctx
@@ -161,15 +170,19 @@ class ChatService:
             document_ids=scope,
             num_ctx=num_ctx,
         )
-        system_prompt = build_system_prompt(conv.agent_profile, user_name=req.user_name)
-        if augmentation.system_addendum:
-            system_prompt = f"{system_prompt}\n\n{augmentation.system_addendum}"
 
         # --- 3. Escritura -------------------------------------------------------------
         async with self.state.sessionmaker() as db:
             conv = await conv_repo.get_conversation(db, req.user_id, req.conversation_id)
             if conv is None:
                 raise NotFoundError("Conversación no encontrada.")
+            if new_attachments:
+                # Un adjunto pudo borrarse mientras se recuperaba el contexto.
+                still_ready = await DocumentService(db, self.state).ready_ids(
+                    req.user_id, new_attachments
+                )
+                if len(still_ready) != len(new_attachments):
+                    raise ValidationAppError("Algún documento adjunto se ha eliminado.")
             hlc = self.state.hlc.now()
             if regenerate_user_id is not None:
                 user_message_id = regenerate_user_id
@@ -202,13 +215,7 @@ class ChatService:
                 and m.content
                 and m.id != replaces_message_id
             ]
-            # Si el mensaje no cabe, se lanza aquí y no se guarda nada (rollback al salir).
-            context = build_context(
-                system_prompt,
-                history,
-                num_ctx=num_ctx,
-                reserve_output=output_reserve(num_ctx, params.max_tokens),
-            )
+            context = self._fit_context(base_prompt, history, augmentation, num_ctx, params)
             await db.commit()
 
         return PreparedTurn(
@@ -221,6 +228,49 @@ class ChatService:
             sources=augmentation.sources,
             warnings=augmentation.warnings,
         )
+
+    @staticmethod
+    def _fit_context(
+        base_prompt: str,
+        history: list[ChatMessage],
+        augmentation: Augmentation,
+        num_ctx: int,
+        params: GenerationParams,
+    ) -> BuiltContext:
+        """Monta el contexto; si no cabe, retira documentos y luego memoria antes de fallar.
+
+        Los recuerdos (aprobados por el usuario) van en el mensaje de sistema. Los
+        fragmentos de documentos (no confiables) van en el mensaje del usuario.
+        """
+        reserve = output_reserve(num_ctx, params.max_tokens)
+        while True:
+            system = "\n\n".join(
+                part
+                for part in (base_prompt, augmentation.memory_block, augmentation.documents_note)
+                if part
+            )
+            messages = list(history)
+            if augmentation.documents_block and messages:
+                last = messages[-1]
+                messages[-1] = ChatMessage(
+                    role=last.role,
+                    content=f"{augmentation.documents_block}\n\n---\n\n{last.content}",
+                )
+            try:
+                # Si ni siquiera el mensaje solo cabe, se lanza y no se guarda nada.
+                return build_context(system, messages, num_ctx=num_ctx, reserve_output=reserve)
+            except ContextOverflowError:
+                if augmentation.documents_block:
+                    augmentation.drop_documents(
+                        "Los fragmentos de documentos no cabían en el contexto junto a tu "
+                        "mensaje y se omitieron."
+                    )
+                elif augmentation.memory_block:
+                    augmentation.drop_memory(
+                        "Los recuerdos no cabían en el contexto junto a tu mensaje y se omitieron."
+                    )
+                else:
+                    raise
 
     # ------------------------------------------------------------------ generación
     async def _generate(self, req: TurnRequest, prepared: PreparedTurn, emit: Emit) -> None:

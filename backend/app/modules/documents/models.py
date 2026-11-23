@@ -52,6 +52,7 @@ class MessageAttachment(Base):
     """Documento adjuntado a un mensaje del usuario. Define qué documentos usa la conversación."""
 
     __tablename__ = "message_attachments"
+    __table_args__ = (Index("ix_message_attachments_document_id", "document_id"),)
 
     message_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True

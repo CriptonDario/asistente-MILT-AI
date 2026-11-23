@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import csv
 import io
+import multiprocessing
+import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,7 +43,8 @@ MAX_PDF_PAGES = 1000
 MAX_ROWS = 100_000
 MAX_CELLS = 500_000
 MAX_ZIP_ENTRIES = 5000
-MAX_UNZIPPED_BYTES = 300 * 1024 * 1024
+MAX_UNZIPPED_BYTES = 50 * 1024 * 1024
+MAX_SECTION_CHARS = 200_000
 MAX_COMPRESSION_RATIO = 150
 
 
@@ -123,6 +126,30 @@ def detect_kind(path: Path, filename: str) -> DocumentKind:
 
 
 # ------------------------------------------------------------------ texto
+class TextBudget:
+    """Límite de caracteres extraídos: un archivo pequeño no puede expandirse sin control.
+
+    Un PDF de 8 KB con un flujo comprimido compartido entre páginas puede producir
+    decenas de millones de caracteres. Se corta en cuanto se supera el presupuesto.
+    """
+
+    def __init__(self, max_chars: int) -> None:
+        self.max_chars = max_chars
+        self.used = 0
+
+    def take(self, text: str) -> str:
+        if len(text) > MAX_SECTION_CHARS:
+            raise DocumentParseError(
+                "El documento contiene un bloque de texto anormalmente grande."
+            )
+        self.used += len(text)
+        if self.used > self.max_chars:
+            raise DocumentParseError(
+                f"El documento es demasiado largo (más de {self.max_chars:,} caracteres)."
+            )
+        return text
+
+
 def decode_text(data: bytes) -> str:
     for encoding in ("utf-8-sig", "cp1252"):
         try:
@@ -132,7 +159,7 @@ def decode_text(data: bytes) -> str:
     return data.decode("latin-1")
 
 
-def _parse_pdf(path: Path) -> list[Section]:
+def _parse_pdf(path: Path, budget: TextBudget) -> list[Section]:
     from pypdf import PdfReader
     from pypdf.errors import PdfReadError
 
@@ -146,15 +173,15 @@ def _parse_pdf(path: Path) -> list[Section]:
         for number, page in enumerate(reader.pages, start=1):
             text = (page.extract_text() or "").strip()
             if text:
-                sections.append(Section(text, {"page": number}))
+                sections.append(Section(budget.take(text), {"page": number}))
         return sections
     except DocumentParseError:
         raise
-    except (PdfReadError, ValueError, KeyError, OSError) as exc:
+    except (PdfReadError, ValueError, KeyError, OSError, RecursionError) as exc:
         raise DocumentParseError("El PDF está dañado o no se puede leer.") from exc
 
 
-def _parse_docx(path: Path) -> list[Section]:
+def _parse_docx(path: Path, budget: TextBudget) -> list[Section]:
     import docx
 
     try:
@@ -162,7 +189,7 @@ def _parse_docx(path: Path) -> list[Section]:
     except Exception as exc:  # python-docx lanza varios tipos según el daño
         raise DocumentParseError("El DOCX está dañado o no se puede leer.") from exc
     sections = [
-        Section(p.text.strip(), {"paragraph": n})
+        Section(budget.take(p.text.strip()), {"paragraph": n})
         for n, p in enumerate(document.paragraphs, start=1)
         if p.text.strip()
     ]
@@ -170,7 +197,7 @@ def _parse_docx(path: Path) -> list[Section]:
         for r, row in enumerate(table.rows, start=1):
             cells = [c.text.strip() for c in row.cells]
             if any(cells):
-                sections.append(Section(" | ".join(cells), {"table": t, "row": r}))
+                sections.append(Section(budget.take(" | ".join(cells)), {"table": t, "row": r}))
     return sections
 
 
@@ -187,7 +214,7 @@ def _row_text(header: list[str] | None, values: list[Any]) -> str:
     return " | ".join(cells)
 
 
-def _parse_xlsx(path: Path) -> list[Section]:
+def _parse_xlsx(path: Path, budget: TextBudget) -> list[Section]:
     from openpyxl import load_workbook
 
     # Se abre como objeto de archivo: en disco el nombre es un UUID sin extensión y
@@ -214,14 +241,14 @@ def _parse_xlsx(path: Path) -> list[Section]:
                 else:
                     text = _row_text(header, values)
                 if text:
-                    sections.append(Section(text, {"sheet": sheet.title, "row": r}))
+                    sections.append(Section(budget.take(text), {"sheet": sheet.title, "row": r}))
     finally:
         workbook.close()
         handle.close()
     return sections
 
 
-def _parse_csv(path: Path) -> list[Section]:
+def _parse_csv(path: Path, budget: TextBudget) -> list[Section]:
     text = decode_text(path.read_bytes())
     try:
         dialect: Any = csv.Sniffer().sniff(text[:4096], delimiters=",;\t|")
@@ -230,28 +257,40 @@ def _parse_csv(path: Path) -> list[Section]:
     reader = csv.reader(io.StringIO(text), dialect)
     sections: list[Section] = []
     header: list[str] | None = None
-    for r, row in enumerate(reader, start=1):
-        if r > MAX_ROWS:
-            raise DocumentParseError(f"El CSV supera {MAX_ROWS} filas.")
-        if header is None:
-            header = [h.strip() for h in row]
-            line = " | ".join(h for h in header if h)
-        else:
-            line = _row_text(header, list(row))
-        if line:
-            sections.append(Section(line, {"row": r}))
+    try:
+        for r, row in enumerate(reader, start=1):
+            if r > MAX_ROWS:
+                raise DocumentParseError(f"El CSV supera {MAX_ROWS} filas.")
+            if header is None:
+                header = [h.strip() for h in row]
+                line = " | ".join(h for h in header if h)
+            else:
+                line = _row_text(header, list(row))
+            if line:
+                sections.append(Section(budget.take(line), {"row": r}))
+    except csv.Error as exc:  # p. ej. un campo mayor que csv.field_size_limit()
+        raise DocumentParseError(f"El CSV no es válido: {exc}") from exc
     return sections
 
 
-def _parse_txt(path: Path) -> list[Section]:
+_PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
+
+
+def _parse_txt(path: Path, budget: TextBudget) -> list[Section]:
     text = decode_text(path.read_bytes()).replace("\r\n", "\n")
     sections: list[Section] = []
-    line_number = 1
-    for block in text.split("\n\n"):
+    start = 0
+    for match in [*_PARAGRAPH_BREAK.finditer(text), None]:
+        end = match.start() if match else len(text)
+        block = text[start:end]
         stripped = block.strip()
         if stripped:
-            sections.append(Section(stripped, {"line": line_number}))
-        line_number += block.count("\n") + 2
+            # Línea real del primer carácter no vacío del bloque.
+            offset = start + (len(block) - len(block.lstrip()))
+            line = text.count("\n", 0, offset) + 1
+            sections.append(Section(budget.take(stripped), {"line": line}))
+        if match:
+            start = match.end()
     return sections
 
 
@@ -264,5 +303,55 @@ _PARSERS = {
 }
 
 
-def parse_document(kind: DocumentKind, path: Path) -> list[Section]:
-    return _PARSERS[kind](path)
+def parse_document(kind: DocumentKind, path: Path, *, max_chars: int) -> list[Section]:
+    return _PARSERS[kind](path, TextBudget(max_chars))
+
+
+# ------------------------------------------------------------------ aislamiento
+def _child(conn: Any, kind: DocumentKind, path: str, max_chars: int) -> None:
+    """Proceso hijo: parsea y devuelve ("ok", secciones) o ("error", mensaje)."""
+    try:
+        sections = parse_document(kind, Path(path), max_chars=max_chars)
+        conn.send(("ok", [(s.text, s.locator) for s in sections]))
+    except (DocumentParseError, UnsupportedDocumentError) as exc:
+        conn.send(("error", exc.detail or exc.title))
+    except MemoryError:
+        conn.send(("error", "El documento necesita demasiada memoria para procesarse."))
+    except Exception:
+        conn.send(("error", "Error inesperado al leer el documento."))
+    finally:
+        conn.close()
+
+
+def parse_isolated(
+    kind: DocumentKind, path: Path, *, max_chars: int, timeout: float
+) -> list[Section]:
+    """Parsea en un subproceso con límite de tiempo (bloqueante: llamar desde un hilo).
+
+    Un archivo malicioso que tarde demasiado se mata sin bloquear al trabajador de
+    ingesta ni el cierre de la aplicación.
+    """
+    ctx = multiprocessing.get_context("spawn")
+    parent, child = ctx.Pipe(duplex=False)
+    process = ctx.Process(target=_child, args=(child, kind, str(path), max_chars), daemon=True)
+    process.start()
+    child.close()
+    try:
+        if not parent.poll(timeout):
+            raise DocumentParseError(
+                f"El documento tardó más de {int(timeout)} s en procesarse y se canceló."
+            )
+        try:
+            status, payload = parent.recv()
+        except EOFError as exc:
+            raise DocumentParseError(
+                "El proceso de lectura terminó inesperadamente (¿memoria insuficiente?)."
+            ) from exc
+    finally:
+        if process.is_alive():
+            process.kill()
+        process.join(5)
+        parent.close()
+    if status != "ok":
+        raise DocumentParseError(str(payload))
+    return [Section(text, locator) for text, locator in payload]

@@ -40,6 +40,8 @@ def make_settings(tmp_path: Path, **overrides: Any) -> Settings:
         "argon2_parallelism": 1,
         # Las embeddings simuladas (bolsa de palabras) puntúan más bajo que las reales.
         "rag_min_score": 0.2,
+        # Un subproceso por documento es lento en equipos con poca RAM; se prueba aparte.
+        "parse_isolated": False,
         "log_json": False,
         "log_level": "WARNING",
         "llm_provider": "fake",

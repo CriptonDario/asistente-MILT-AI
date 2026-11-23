@@ -85,6 +85,9 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['message_id'], ['messages.id'], name=op.f('fk_message_attachments_message_id_messages'), ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('message_id', 'document_id', name=op.f('pk_message_attachments'))
     )
+    with op.batch_alter_table('message_attachments', schema=None) as batch_op:
+        batch_op.create_index('ix_message_attachments_document_id', ['document_id'], unique=False)
+
     with op.batch_alter_table('messages', schema=None) as batch_op:
         batch_op.add_column(sa.Column('context_sources', sa.JSON().with_variant(postgresql.JSONB(astext_type=sa.Text()), 'postgresql'), nullable=True))
 
@@ -99,6 +102,9 @@ def downgrade() -> None:
 
     with op.batch_alter_table('messages', schema=None) as batch_op:
         batch_op.drop_column('context_sources')
+
+    with op.batch_alter_table('message_attachments', schema=None) as batch_op:
+        batch_op.drop_index('ix_message_attachments_document_id')
 
     op.drop_table('message_attachments')
     with op.batch_alter_table('document_chunks', schema=None) as batch_op:

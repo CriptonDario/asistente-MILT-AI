@@ -5,11 +5,13 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import re
+import shutil
 import uuid
 from collections.abc import Sequence
 from pathlib import Path
 
 import anyio.to_thread
+import structlog
 from fastapi import UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,9 +25,9 @@ from app.modules.documents.parsers import MIME_TYPES, detect_kind
 from app.modules.documents.retriever import RetrievedChunk, retrieve_chunks
 from app.modules.documents.schemas import DocumentSearchHit
 
-MAX_DOCUMENTS_PER_USER = 500
 MAX_BYTES_PER_USER = 2 * 1024 * 1024 * 1024
 _READ_CHUNK = 1024 * 1024
+log = structlog.get_logger(__name__)
 _UNSAFE_NAME = re.compile(r"[\x00-\x1f\x7f<>:\"/\\|?*]+")
 
 
@@ -71,7 +73,7 @@ class DocumentService:
             select(Document)
             .where(Document.user_id == user_id)
             .order_by(Document.created_at.desc())
-            .limit(MAX_DOCUMENTS_PER_USER)
+            .limit(self.settings.max_documents_per_user)
         )
         return (await self.db.scalars(stmt)).all()
 
@@ -83,8 +85,10 @@ class DocumentService:
                 )
             )
         ).one()
-        if count >= MAX_DOCUMENTS_PER_USER:
-            raise ValidationAppError(f"Máximo de {MAX_DOCUMENTS_PER_USER} documentos alcanzado.")
+        if count >= self.settings.max_documents_per_user:
+            raise ValidationAppError(
+                f"Máximo de {self.settings.max_documents_per_user} documentos alcanzado."
+            )
         if total >= MAX_BYTES_PER_USER:
             raise ValidationAppError("Has alcanzado el espacio máximo para documentos.")
 
@@ -149,8 +153,12 @@ class DocumentService:
         path = document_path(self.settings, user_id, doc.storage_key)
         await self.db.delete(doc)
         await self.db.commit()
-        with contextlib.suppress(FileNotFoundError):
-            path.unlink()
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            # En Windows falla si el archivo está abierto (procesándose o descargándose).
+            # El barrido de huérfanos del arranque lo eliminará.
+            log.warning("document_file_unlink_failed", document_id=str(document_id))
 
     async def reindex(self, user_id: uuid.UUID, document_id: uuid.UUID) -> Document:
         doc = await self.get(user_id, document_id)
@@ -200,3 +208,22 @@ class DocumentService:
 
     def file_path(self, doc: Document) -> Path:
         return document_path(self.settings, doc.user_id, doc.storage_key)
+
+
+async def purge_user_files_and_vectors(state: AppState, user_id: uuid.UUID) -> None:
+    """Al eliminar un usuario: borra sus vectores y sus archivos originales del disco.
+
+    La cascada de SQL elimina las filas, pero ni Qdrant ni los archivos dependen de ella.
+    """
+    from app.vector.base import collection_name
+
+    for collection in (
+        state.ingestion.collection,
+        collection_name("memories", state.embeddings.model),
+    ):
+        try:
+            await state.vectors.delete(collection, user_id)
+        except Exception:
+            log.warning("purge_vectors_failed", user_id=str(user_id), collection=collection)
+    user_dir = state.settings.uploads_dir / str(user_id)
+    await anyio.to_thread.run_sync(lambda: shutil.rmtree(user_dir, ignore_errors=True))

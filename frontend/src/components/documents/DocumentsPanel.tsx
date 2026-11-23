@@ -48,8 +48,11 @@ function DocumentRow({ doc }: { doc: DocumentInfo }) {
             · {doc.kind.toUpperCase()} · {formatBytes(doc.size_bytes)}
             {doc.status === "ready" && ` · ${doc.chunk_count} fragmentos`}· {timeAgo(doc.created_at)}
           </p>
-          {doc.status === "failed" && doc.error && (
-            <p className="mt-1 text-xs text-danger">{doc.error}</p>
+          {doc.error && (
+            // Un reindexado fallido deja el documento listo con el índice anterior.
+            <p className={cn("mt-1 text-xs", doc.status === "failed" ? "text-danger" : "text-warn")}>
+              {doc.error}
+            </p>
           )}
         </div>
         <div className="flex shrink-0 gap-0.5">

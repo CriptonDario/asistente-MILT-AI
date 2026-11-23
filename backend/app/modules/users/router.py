@@ -8,6 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, Request, status
 
 from app.core.deps import AdminDep, DbDep, StateDep, client_ip
+from app.modules.documents.service import purge_user_files_and_vectors
 from app.modules.users.schemas import UserCreate, UserOut, UserUpdate
 from app.modules.users.service import UserService
 
@@ -68,6 +69,7 @@ async def delete_user(
     user_id: uuid.UUID, request: Request, db: DbDep, state: StateDep, admin: AdminDep
 ) -> None:
     await UserService(db, state.passwords).delete(user_id, actor=admin.user)
+    await purge_user_files_and_vectors(state, user_id)
     await state.audit.record(
         "user.delete",
         user_id=admin.user.id,

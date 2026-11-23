@@ -61,14 +61,14 @@ def test_rejects_zip_bomb(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- parsers
 def test_parse_pdf_pages(tmp_path: Path) -> None:
     path = write(tmp_path, "c4d5e6", make_pdf(["Primera pagina", "Segunda pagina"]))
-    sections = parse_document("pdf", path)
+    sections = parse_document("pdf", path, max_chars=1_000_000)
     assert [s.locator for s in sections] == [{"page": 1}, {"page": 2}]
     assert "Segunda" in sections[1].text
 
 
 def test_parse_docx_paragraphs_and_tables(tmp_path: Path) -> None:
     data = make_docx(["Introducción", "", "Conclusión"], table=[["Nombre", "Edad"], ["Ana", "30"]])
-    sections = parse_document("docx", write(tmp_path, "7b21e0", data))
+    sections = parse_document("docx", write(tmp_path, "7b21e0", data), max_chars=1_000_000)
     texts = [s.text for s in sections]
     assert texts[:2] == ["Introducción", "Conclusión"]
     assert "Ana | 30" in texts
@@ -78,7 +78,7 @@ def test_parse_docx_paragraphs_and_tables(tmp_path: Path) -> None:
 def test_parse_xlsx_uses_header_and_ignores_formulas(tmp_path: Path) -> None:
     data = make_xlsx({"Ventas": [["Producto", "Total"], ["Café", 12.5], ["Té", "=1+1"]]})
     # En disco el archivo se guarda con un nombre UUID sin extensión.
-    sections = parse_document("xlsx", write(tmp_path, "0f3a9c", data))
+    sections = parse_document("xlsx", write(tmp_path, "0f3a9c", data), max_chars=1_000_000)
     assert sections[1].text == "Producto: Café; Total: 12.5"
     assert sections[1].locator == {"sheet": "Ventas", "row": 2}
     # data_only=True: la fórmula no se evalúa ni se expone; sin valor calculado queda vacía.
@@ -87,13 +87,15 @@ def test_parse_xlsx_uses_header_and_ignores_formulas(tmp_path: Path) -> None:
 
 def test_parse_csv_semicolon_and_latin1(tmp_path: Path) -> None:
     data = "ciudad;población\nMadrid;3300000\nSevilla;680000\n".encode("cp1252")
-    sections = parse_document("csv", write(tmp_path, "a.csv", data))
+    sections = parse_document("csv", write(tmp_path, "a.csv", data), max_chars=1_000_000)
     assert sections[1].text == "ciudad: Madrid; población: 3300000"
     assert sections[2].locator == {"row": 3}
 
 
 def test_parse_txt_paragraph_lines(tmp_path: Path) -> None:
-    sections = parse_document("txt", write(tmp_path, "a.txt", b"uno\ndos\n\ntres\n"))
+    sections = parse_document(
+        "txt", write(tmp_path, "a.txt", b"uno\ndos\n\ntres\n"), max_chars=1_000_000
+    )
     assert [(s.text, s.locator["line"]) for s in sections] == [("uno\ndos", 1), ("tres", 4)]
 
 

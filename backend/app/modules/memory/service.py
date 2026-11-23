@@ -7,10 +7,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import structlog
-from sqlalchemy import delete, func, select
+from sqlalchemy import ColumnElement, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, NotFoundError, ValidationAppError
+from app.core.ids import uuid7
 from app.core.state import AppState
 from app.db.types import utcnow
 from app.modules.memory.models import Memory
@@ -76,18 +77,42 @@ class MemoryService:
             stmt = stmt.where(Memory.content.ilike(f"%{escaped}%", escape="\\"))
         return (await self.db.scalars(stmt.order_by(Memory.updated_at.desc()).limit(500))).all()
 
+    def _stale(self) -> ColumnElement[bool]:
+        """Sin indexar, o indexado con otro modelo de embeddings (colección distinta)."""
+        return or_(
+            Memory.embedding_model.is_(None), Memory.embedding_model != self.embeddings.model
+        )
+
     async def stats(self, user_id: uuid.UUID) -> MemoryStats:
+        base = (Memory.user_id == user_id, Memory.deleted_at.is_(None))
         rows = (
             await self.db.execute(
-                select(Memory.status, Memory.embedding_model.is_(None), func.count())
-                .where(Memory.user_id == user_id, Memory.deleted_at.is_(None))
-                .group_by(Memory.status, Memory.embedding_model.is_(None))
+                select(Memory.status, func.count()).where(*base).group_by(Memory.status)
             )
         ).all()
-        active = sum(c for s, _u, c in rows if s == "active")
-        suggested = sum(c for s, _u, c in rows if s == "suggested")
-        unindexed = sum(c for s, unindexed, c in rows if s == "active" and unindexed)
-        return MemoryStats(active=active, suggested=suggested, unindexed=unindexed)
+        counts = {status: int(count) for status, count in rows}
+        unindexed = await self.db.scalar(
+            select(func.count())
+            .select_from(Memory)
+            .where(*base, Memory.status == "active", self._stale())
+        )
+        return MemoryStats(
+            active=counts.get("active", 0),
+            suggested=counts.get("suggested", 0),
+            unindexed=int(unindexed or 0),
+        )
+
+    async def has_active(self, user_id: uuid.UUID) -> bool:
+        found = await self.db.scalar(
+            select(Memory.id)
+            .where(
+                Memory.user_id == user_id,
+                Memory.status == "active",
+                Memory.deleted_at.is_(None),
+            )
+            .limit(1)
+        )
+        return found is not None
 
     # ------------------------------------------------------------------ índice vectorial
     async def _index(self, memory: Memory) -> None:
@@ -114,10 +139,12 @@ class MemoryService:
                     Memory.user_id == user_id,
                     Memory.status == "active",
                     Memory.deleted_at.is_(None),
-                    Memory.embedding_model.is_(None),
+                    self._stale(),
                 )
             )
         ).all()
+        # El SELECT solo abre una transacción de lectura (WAL): no bloquea a otros
+        # escritores mientras se espera a Ollama. Las escrituras van al commit final.
         for memory in pending:
             await self._index(memory)
         await self.db.commit()
@@ -144,6 +171,7 @@ class MemoryService:
     ) -> Memory:
         await self._check_quota(user_id)
         memory = Memory(
+            id=uuid7(),
             user_id=user_id,
             content=data.content.strip(),
             kind=data.kind,
@@ -154,10 +182,11 @@ class MemoryService:
             source_conversation_id=conversation_id,
             updated_hlc=self.state.hlc.now(),
         )
-        self.db.add(memory)
-        await self.db.flush()
+        # Sin flush antes de indexar: un INSERT abriría la transacción de escritura de
+        # SQLite y la mantendría mientras se espera a Ollama, bloqueando a los demás.
         if status == "active":
             await self._index(memory)
+        self.db.add(memory)
         await self.db.commit()
         return memory
 
