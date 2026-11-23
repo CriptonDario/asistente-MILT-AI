@@ -13,6 +13,7 @@ from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.conversations.models import Conversation, Message
+from app.modules.documents.models import Document, MessageAttachment
 
 
 def escape_like(value: str) -> str:
@@ -99,6 +100,44 @@ async def get_message(
         Message.deleted_at.is_(None),
     )
     return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def conversation_document_ids(
+    db: AsyncSession, conversation_id: uuid.UUID
+) -> list[uuid.UUID]:
+    """Documentos adjuntados en cualquier mensaje visible de la conversación (su ámbito RAG)."""
+    stmt = (
+        select(MessageAttachment.document_id)
+        .join(Message, Message.id == MessageAttachment.message_id)
+        .join(Document, Document.id == MessageAttachment.document_id)
+        .where(
+            Message.conversation_id == conversation_id,
+            Message.deleted_at.is_(None),
+            Document.status == "ready",
+        )
+        .distinct()
+    )
+    return list((await db.scalars(stmt)).all())
+
+
+async def attachments_for_messages(
+    db: AsyncSession, message_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, list[dict[str, str]]]:
+    if not message_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(MessageAttachment.message_id, Document.id, Document.filename)
+            .join(Document, Document.id == MessageAttachment.document_id)
+            .where(MessageAttachment.message_id.in_(list(message_ids)))
+        )
+    ).all()
+    out: dict[uuid.UUID, list[dict[str, str]]] = {}
+    for message_id, document_id, filename in rows:
+        out.setdefault(message_id, []).append(
+            {"document_id": str(document_id), "filename": filename}
+        )
+    return out
 
 
 async def count_messages(db: AsyncSession, conversation_id: uuid.UUID) -> int:

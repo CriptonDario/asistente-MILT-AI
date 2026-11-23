@@ -7,7 +7,7 @@ import contextlib
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
@@ -18,6 +18,7 @@ from app.core.ids import uuid7
 from app.core.state import AppState
 from app.llm.base import (
     ChatMessage,
+    ContextOverflowError,
     Done,
     GenerationParams,
     TextDelta,
@@ -25,10 +26,14 @@ from app.llm.base import (
     ToolCallRequest,
     Usage,
 )
-from app.modules.chat.context_builder import build_context, output_reserve
+from app.modules.chat.augment import Augmentation, gather_context
+from app.modules.chat.context_builder import BuiltContext, build_context, output_reserve
 from app.modules.conversations import repository as conv_repo
 from app.modules.conversations.models import Message
 from app.modules.conversations.service import title_from_text
+from app.modules.documents.models import MessageAttachment
+from app.modules.documents.service import DocumentService
+from app.modules.memory.service import MemoryService
 from app.modules.settings.models import UserSettings
 from app.modules.settings.service import base_generation_params
 
@@ -49,6 +54,8 @@ class TurnRequest:
     model: str | None = None
     params: GenerationParams | None = None
     regenerate: bool = False
+    attachments: tuple[uuid.UUID, ...] = ()
+    use_memory: bool = True
 
 
 @dataclass(frozen=True)
@@ -59,6 +66,8 @@ class PreparedTurn:
     user_message_id: uuid.UUID
     dropped_messages: int
     replaces_message_id: uuid.UUID | None = None
+    sources: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 class ChatService:
@@ -85,6 +94,12 @@ class ChatService:
 
     # ------------------------------------------------------------------ preparación
     async def _prepare(self, req: TurnRequest) -> PreparedTurn:
+        """Tres fases: lectura/validación, recuperación de contexto y escritura.
+
+        La recuperación (embeddings en Ollama) se hace sin transacción abierta para no
+        bloquear la escritura en SQLite mientras tanto.
+        """
+        # --- 1. Lectura y validación (nada se escribe todavía) -----------------------
         async with self.state.sessionmaker() as db:
             conv = await conv_repo.get_conversation(db, req.user_id, req.conversation_id)
             if conv is None:
@@ -93,16 +108,16 @@ class ChatService:
 
             model = req.model or conv.model or (prefs.default_model if prefs else None)
             model = model or self.settings.default_model
-            # Se valida el modelo ANTES de escribir nada: un modelo inexistente o el motor
-            # apagado no deben dejar la conversación en un estado inconsistente.
+            # Un modelo inexistente o el motor apagado no deben dejar la conversación en un
+            # estado inconsistente: se valida antes de escribir.
             await self.state.llm.get().get_model(model)
             base = base_generation_params(self.settings, prefs)
             if conv.params:
                 base = GenerationParams(**conv.params).merged_over(base)
             params = (req.params or GenerationParams()).merged_over(base)
 
-            hlc = self.state.hlc.now()
             replaces_message_id: uuid.UUID | None = None
+            regenerate_user_id: uuid.UUID | None = None
             if req.regenerate:
                 recent = await conv_repo.recent_messages(db, conv.id, limit=2)
                 if recent and recent[-1].role == "assistant":
@@ -111,26 +126,82 @@ class ChatService:
                     recent = recent[:-1]
                 if not recent or recent[-1].role != "user":
                     raise ValidationAppError("No hay ningún mensaje del usuario que regenerar.")
-                user_message_id = recent[-1].id
+                regenerate_user_id = recent[-1].id
+                query = recent[-1].content
             else:
-                content = (req.content or "").strip()
-                if not content:
+                query = (req.content or "").strip()
+                if not query:
                     raise ValidationAppError("El mensaje está vacío.")
-                if len(content) > self.settings.chat_max_input_chars:
+                if len(query) > self.settings.chat_max_input_chars:
                     raise ValidationAppError(
                         f"El mensaje supera {self.settings.chat_max_input_chars} caracteres."
                     )
+
+            new_attachments = list(dict.fromkeys(req.attachments))
+            if new_attachments:
+                ready = await DocumentService(db, self.state).ready_ids(
+                    req.user_id, new_attachments
+                )
+                if len(ready) != len(new_attachments):
+                    raise ValidationAppError(
+                        "Algún documento adjunto no existe o todavía se está procesando."
+                    )
+            scope = list(
+                dict.fromkeys(
+                    [*await conv_repo.conversation_document_ids(db, conv.id), *new_attachments]
+                )
+            )
+            # Sin recuerdos no se calcula el embedding de la pregunta (ahorra una llamada
+            # a Ollama, y quizá un cambio de modelo en memoria, en cada turno).
+            use_memory = (
+                req.use_memory
+                and (prefs.memory_enabled if prefs else True)
+                and await MemoryService(db, self.state).has_active(req.user_id)
+            )
+            base_prompt = build_system_prompt(conv.agent_profile, user_name=req.user_name)
+
+        # --- 2. Recuperación de contexto (memoria + documentos) -----------------------
+        num_ctx = params.num_ctx or self.settings.default_num_ctx
+        augmentation = await gather_context(
+            self.state,
+            req.user_id,
+            query,
+            use_memory=use_memory,
+            document_ids=scope,
+            num_ctx=num_ctx,
+        )
+
+        # --- 3. Escritura -------------------------------------------------------------
+        async with self.state.sessionmaker() as db:
+            conv = await conv_repo.get_conversation(db, req.user_id, req.conversation_id)
+            if conv is None:
+                raise NotFoundError("Conversación no encontrada.")
+            if new_attachments:
+                # Un adjunto pudo borrarse mientras se recuperaba el contexto.
+                still_ready = await DocumentService(db, self.state).ready_ids(
+                    req.user_id, new_attachments
+                )
+                if len(still_ready) != len(new_attachments):
+                    raise ValidationAppError("Algún documento adjunto se ha eliminado.")
+            hlc = self.state.hlc.now()
+            if regenerate_user_id is not None:
+                user_message_id = regenerate_user_id
+            else:
                 user_message = Message(
                     id=uuid7(),
                     conversation_id=conv.id,
                     role="user",
-                    content=content,
+                    content=query,
                     updated_hlc=hlc,
                 )
                 db.add(user_message)
                 user_message_id = user_message.id
+                db.add_all(
+                    MessageAttachment(message_id=user_message.id, document_id=doc_id)
+                    for doc_id in new_attachments
+                )
                 if conv.title is None:
-                    conv.title = title_from_text(content)
+                    conv.title = title_from_text(query)
 
             # El modelo de la petición es puntual: el de la conversación solo cambia con PATCH.
             conv.touch(hlc)
@@ -144,14 +215,7 @@ class ChatService:
                 and m.content
                 and m.id != replaces_message_id
             ]
-            num_ctx = params.num_ctx or self.settings.default_num_ctx
-            # Si el mensaje no cabe, se lanza aquí y no se guarda nada (rollback al salir).
-            context = build_context(
-                build_system_prompt(conv.agent_profile, user_name=req.user_name),
-                history,
-                num_ctx=num_ctx,
-                reserve_output=output_reserve(num_ctx, params.max_tokens),
-            )
+            context = self._fit_context(base_prompt, history, augmentation, num_ctx, params)
             await db.commit()
 
         return PreparedTurn(
@@ -161,7 +225,52 @@ class ChatService:
             user_message_id=user_message_id,
             dropped_messages=context.dropped,
             replaces_message_id=replaces_message_id,
+            sources=augmentation.sources,
+            warnings=augmentation.warnings,
         )
+
+    @staticmethod
+    def _fit_context(
+        base_prompt: str,
+        history: list[ChatMessage],
+        augmentation: Augmentation,
+        num_ctx: int,
+        params: GenerationParams,
+    ) -> BuiltContext:
+        """Monta el contexto; si no cabe, retira documentos y luego memoria antes de fallar.
+
+        Los recuerdos (aprobados por el usuario) van en el mensaje de sistema. Los
+        fragmentos de documentos (no confiables) van en el mensaje del usuario.
+        """
+        reserve = output_reserve(num_ctx, params.max_tokens)
+        while True:
+            system = "\n\n".join(
+                part
+                for part in (base_prompt, augmentation.memory_block, augmentation.documents_note)
+                if part
+            )
+            messages = list(history)
+            if augmentation.documents_block and messages:
+                last = messages[-1]
+                messages[-1] = ChatMessage(
+                    role=last.role,
+                    content=f"{augmentation.documents_block}\n\n---\n\n{last.content}",
+                )
+            try:
+                # Si ni siquiera el mensaje solo cabe, se lanza y no se guarda nada.
+                return build_context(system, messages, num_ctx=num_ctx, reserve_output=reserve)
+            except ContextOverflowError:
+                if augmentation.documents_block:
+                    augmentation.drop_documents(
+                        "Los fragmentos de documentos no cabían en el contexto junto a tu "
+                        "mensaje y se omitieron."
+                    )
+                elif augmentation.memory_block:
+                    augmentation.drop_memory(
+                        "Los recuerdos no cabían en el contexto junto a tu mensaje y se omitieron."
+                    )
+                else:
+                    raise
 
     # ------------------------------------------------------------------ generación
     async def _generate(self, req: TurnRequest, prepared: PreparedTurn, emit: Emit) -> None:
@@ -178,6 +287,15 @@ class ChatService:
                 "context_dropped_messages": prepared.dropped_messages,
             }
         )
+        if prepared.sources or prepared.warnings:
+            await emit(
+                {
+                    "type": "chat.context",
+                    "request_id": req.request_id,
+                    "sources": prepared.sources,
+                    "warnings": prepared.warnings,
+                }
+            )
 
         parts: list[str] = []
         usage = Usage()
@@ -284,6 +402,7 @@ class ChatService:
                         completion_tokens=usage.completion_tokens or None,
                         latency_ms=latency_ms,
                         status=status,
+                        context_sources=prepared.sources or None,
                         updated_hlc=hlc,
                     )
                 )

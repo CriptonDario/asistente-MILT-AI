@@ -32,6 +32,18 @@ describe("reduceStream", () => {
     expect(isActive(s)).toBe(false);
   });
 
+  it("guarda las fuentes y avisos de chat.context", () => {
+    const s = reduceStream(base, {
+      type: "chat.context",
+      request_id: "r1",
+      sources: [{ kind: "document", id: "k1", title: "orion.txt", ref: 1, location: "pág. 2" }],
+      warnings: ["aviso"],
+    });
+    expect(s.sources[0]?.title).toBe("orion.txt");
+    expect(s.warnings).toEqual(["aviso"]);
+    expect(s.status).toBe("pending");
+  });
+
   it("distingue cancelación de error y ignora otros request_id", () => {
     expect(
       reduceStream(base, { type: "chat.error", request_id: "r1", code: "cancelled", detail: "" })
@@ -75,6 +87,8 @@ describe("visibleTimeline", () => {
     prompt_tokens: null,
     completion_tokens: null,
     latency_ms: null,
+    context_sources: null,
+    attachments: [],
     created_at: "2026-01-01T00:00:00Z",
   });
 

@@ -100,27 +100,36 @@ class SecurityHeadersMiddleware:
 class BodySizeLimitMiddleware:
     """Rechaza cuerpos mayores que ``max_bytes`` (por Content-Length o contando bytes)."""
 
-    def __init__(self, app: ASGIApp, *, max_bytes: int) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        max_bytes: int,
+        path_limits: dict[str, int] | None = None,
+    ) -> None:
         self.app = app
         self.max_bytes = max_bytes
+        #: Límites específicos por ruta exacta (p. ej. la subida de documentos).
+        self.path_limits = path_limits or {}
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
+        limit = self.path_limits.get(scope.get("path", ""), self.max_bytes)
         for name, value in scope.get("headers", []):
             if name == b"content-length":
                 try:
                     declared = int(value)
                 except ValueError:
                     declared = -1
-                if declared < 0 or declared > self.max_bytes:
+                if declared < 0 or declared > limit:
                     response = problem_response(
                         status=413,
                         code="payload_too_large",
                         title="Contenido demasiado grande",
-                        detail=f"El cuerpo supera el máximo de {self.max_bytes} bytes.",
+                        detail=f"El cuerpo supera el máximo de {limit} bytes.",
                         instance=scope.get("path"),
                     )
                     await response(scope, receive, send)
@@ -134,7 +143,7 @@ class BodySizeLimitMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > self.max_bytes:
+                if received > limit:
                     # Se corta la lectura: Starlette lo trata como desconexión del cliente.
                     return {"type": "http.disconnect"}
             return message

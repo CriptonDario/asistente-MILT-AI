@@ -1,7 +1,8 @@
 import { Check, Copy, RotateCcw, Trash } from "lucide-react";
 import { useState } from "react";
 import { formatDuration } from "../../lib/format";
-import type { Message } from "../../types/api";
+import type { Attachment, Message } from "../../types/api";
+import { AttachmentChips, Sources } from "./Sources";
 import { IconButton } from "../ui/Button";
 import { Logo } from "../ui/Logo";
 import { Markdown } from "./Markdown";
@@ -14,9 +15,16 @@ interface MessageItemProps {
   onDelete: () => void;
 }
 
-export function UserBubble({ content }: { content: string }) {
+export function UserBubble({
+  content,
+  attachments = [],
+}: {
+  content: string;
+  attachments?: Attachment[];
+}) {
   return (
-    <div className="flex justify-end">
+    <div className="flex flex-col items-end">
+      <AttachmentChips attachments={attachments} />
       <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-surface-2 px-4 py-2.5 text-[15px] leading-relaxed">
         {content}
       </div>
@@ -63,7 +71,9 @@ export function AssistantShell({
 }
 
 export function MessageItem({ message, isLast, busy, onRegenerate, onDelete }: MessageItemProps) {
-  if (message.role === "user") return <UserBubble content={message.content} />;
+  if (message.role === "user") {
+    return <UserBubble content={message.content} attachments={message.attachments ?? []} />;
+  }
 
   const meta = [
     message.model,
@@ -85,6 +95,7 @@ export function MessageItem({ message, isLast, busy, onRegenerate, onDelete }: M
         </div>
       )}
       <Markdown text={message.content} />
+      <Sources sources={message.context_sources ?? []} />
       <div className="group mt-1 flex items-center gap-1 text-xs text-muted">
         <CopyButton text={message.content} />
         {isLast && (

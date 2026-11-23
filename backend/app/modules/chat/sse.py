@@ -50,6 +50,8 @@ async def chat_completions(
         model=body.model,
         params=body.params,
         regenerate=body.regenerate,
+        attachments=tuple(body.attachments),
+        use_memory=body.use_memory,
     )
 
     async def emit(event: dict[str, Any]) -> None:

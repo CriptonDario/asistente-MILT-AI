@@ -9,9 +9,11 @@ import {
   useConversation,
   useCreateConversation,
   useDeleteMessage,
+  useDocuments,
   useMessages,
   useSettings,
   useUpdateConversation,
+  useUploadDocument,
 } from "../hooks/queries";
 import { useChatActions, useStream } from "../hooks/useChat";
 import { errorMessage } from "../services/http";
@@ -33,16 +35,18 @@ export function ChatPage() {
   const updateConversation = useUpdateConversation();
   const deleteMessage = useDeleteMessage(conversationId ?? "");
   const { send, regenerate, cancel, dismiss } = useChatActions();
+  const documents = useDocuments();
+  const uploadDocument = useUploadDocument();
   const [createError, setCreateError] = useState<string | null>(null);
 
   const streaming = isActive(stream);
   const model = conversationId ? (conversation.data?.model ?? null) : draftModel;
   const defaultModel = settings.data?.effective_default_model;
 
-  const handleSend = async (text: string) => {
+  const handleSend = async (text: string, attachments: string[] = []) => {
     setCreateError(null);
     if (conversationId) {
-      void send(conversationId, text);
+      void send(conversationId, text, { attachments });
       return;
     }
     // Primera pregunta: se crea la conversación y se envía en cuanto existe.
@@ -50,7 +54,7 @@ export function ChatPage() {
       const conv = await createConversation.mutateAsync(draftModel ? { model: draftModel } : {});
       setDraftModel(null);
       navigate(`/c/${conv.id}`);
-      void send(conv.id, text);
+      void send(conv.id, text, { attachments });
     } catch (error) {
       setCreateError(errorMessage(error));
     }
@@ -66,6 +70,7 @@ export function ChatPage() {
   return (
     <>
       <Header
+        conversationId={conversationId}
         title={conversation.data?.title ?? "Nueva conversación"}
         model={model}
         defaultModel={defaultModel}
@@ -101,10 +106,12 @@ export function ChatPage() {
         )}
         <Composer
           key={conversationId ?? "nueva"}
-          onSend={(text) => void handleSend(text)}
+          onSend={(text, attachments) => void handleSend(text, attachments)}
           onStop={() => conversationId && cancel(conversationId)}
           streaming={streaming}
           disabled={Boolean(notFound) || createConversation.isPending}
+          documents={documents.data ?? []}
+          onUpload={async (file) => (await uploadDocument.mutateAsync(file)).document}
         />
         <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-muted">
           MILT puede equivocarse. Verifica la información importante.

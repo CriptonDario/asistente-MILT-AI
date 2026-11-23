@@ -15,6 +15,7 @@ from app.core.pagination import Page, decode_cursor, encode_cursor
 from app.modules.conversations import repository
 from app.modules.conversations.models import Conversation, Message
 from app.modules.conversations.schemas import (
+    AttachmentOut,
     ConversationCreate,
     ConversationOut,
     ConversationUpdate,
@@ -146,9 +147,17 @@ class ConversationService:
         )
         items = list(rows[:limit])
         next_cursor = encode_cursor([str(items[-1].id)]) if len(rows) > limit else None
-        return Page[MessageOut](
-            items=[MessageOut.model_validate(m) for m in items], next_cursor=next_cursor
+        attachments = await repository.attachments_for_messages(
+            self.db, [m.id for m in items if m.role == "user"]
         )
+        out = []
+        for message in items:
+            item = MessageOut.model_validate(message)
+            item.attachments = [
+                AttachmentOut.model_validate(a) for a in attachments.get(message.id, [])
+            ]
+            out.append(item)
+        return Page[MessageOut](items=out, next_cursor=next_cursor)
 
     async def delete_message(
         self, user_id: uuid.UUID, conversation_id: uuid.UUID, message_id: uuid.UUID

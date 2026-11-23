@@ -1,9 +1,11 @@
-import { Globe, Laptop, Monitor, Moon, PanelLeft, Sun } from "lucide-react";
-import { useSystemInfo, useUpdateSettings } from "../../hooks/queries";
+import { Globe, Laptop, Monitor, Moon, PanelLeft, Sparkles, Sun } from "lucide-react";
+import { useExtractMemories, useSystemInfo, useUpdateSettings } from "../../hooks/queries";
+import { errorMessage } from "../../services/http";
 import { cn } from "../../lib/cn";
 import { useSession } from "../../stores/session";
 import { useUi } from "../../stores/ui";
 import type { Theme } from "../../types/api";
+import { useState } from "react";
 import { ModelSelector } from "../chat/ModelSelector";
 import { IconButton } from "../ui/Button";
 
@@ -56,14 +58,53 @@ function NodeStatus() {
   );
 }
 
+function SuggestMemoriesButton({ conversationId }: { conversationId: string }) {
+  const extract = useExtractMemories();
+  const openPanel = useUi((s) => s.openPanel);
+  const [note, setNote] = useState<string | null>(null);
+
+  const run = () => {
+    setNote(null);
+    extract.mutate(conversationId, {
+      onSuccess: (result) => {
+        if (result.created.length > 0) openPanel("memory", "suggestions");
+        else setNote("No hay nada nuevo que recordar en esta conversación.");
+      },
+      onError: (error) => setNote(errorMessage(error)),
+    });
+  };
+
+  return (
+    <div className="relative">
+      <IconButton
+        label={extract.isPending ? "Analizando la conversación…" : "Sugerir recuerdos de esta conversación"}
+        onClick={run}
+        disabled={extract.isPending}
+      >
+        <Sparkles className={cn("size-4", extract.isPending && "animate-pulse text-accent")} />
+      </IconButton>
+      {note && (
+        <button
+          type="button"
+          onClick={() => setNote(null)}
+          className="absolute right-0 top-11 z-30 w-64 rounded-lg border border-border bg-surface p-3 text-left text-xs text-muted shadow-panel"
+        >
+          {note}
+        </button>
+      )}
+    </div>
+  );
+}
+
 interface HeaderProps {
+  conversationId?: string;
   title: string;
   model: string | null;
   defaultModel: string | undefined;
   onModelChange: (model: string) => void;
 }
 
-export function Header({ title, model, defaultModel, onModelChange }: HeaderProps) {
+export function Header({ conversationId, title, model, defaultModel, onModelChange }: HeaderProps) {
   const sidebarOpen = useUi((s) => s.sidebarOpen);
   const toggleSidebar = useUi((s) => s.toggleSidebar);
   const theme = useUi((s) => s.theme);
@@ -91,6 +132,7 @@ export function Header({ title, model, defaultModel, onModelChange }: HeaderProp
       </h1>
       <div className="ml-auto flex items-center gap-1">
         <NodeStatus />
+        {conversationId && <SuggestMemoriesButton conversationId={conversationId} />}
         <IconButton label={`${THEME_LABEL[theme]} (cambiar)`} onClick={cycleTheme}>
           <ThemeIcon className="size-4" />
         </IconButton>

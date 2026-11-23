@@ -4,9 +4,17 @@ import type {
   ConversationCreate,
   ConversationPage,
   ConversationUpdate,
+  DocumentInfo,
+  ExtractResult,
+  Memory,
+  MemoryCreate,
+  MemoryKind,
+  MemoryStats,
+  MemoryUpdate,
   Message,
   MessagePage,
   ModelInfo,
+  UploadResult,
   SessionInfo,
   SettingsUpdate,
   SetupStatus,
@@ -63,6 +71,50 @@ export const conversationsApi = {
     api<void>(`/conversations/${id}/messages/${messageId}`, { method: "DELETE" }),
   exportMarkdown: (id: string) =>
     api<string>(`/conversations/${id}/export`, { query: { format: "md" } }),
+};
+
+// ------------------------------------------------------------------- memoria
+export const memoriesApi = {
+  list: (params: { kind?: MemoryKind; q?: string } = {}) =>
+    api<Memory[]>("/memories", { query: params }),
+  stats: () => api<MemoryStats>("/memories/stats"),
+  suggestions: () => api<Memory[]>("/memories/suggestions"),
+  create: (body: MemoryCreate) => api<Memory>("/memories", { method: "POST", body }),
+  update: (id: string, body: MemoryUpdate) =>
+    api<Memory>(`/memories/${id}`, { method: "PATCH", body }),
+  remove: (id: string) => api<void>(`/memories/${id}`, { method: "DELETE" }),
+  removeAll: () => api<void>("/memories", { method: "DELETE", body: { confirm: "DELETE" } }),
+  accept: (id: string) => api<Memory>(`/memories/suggestions/${id}/accept`, { method: "POST" }),
+  reject: (id: string) => api<void>(`/memories/suggestions/${id}/reject`, { method: "POST" }),
+  extract: (conversationId: string) =>
+    api<ExtractResult>("/memories/extract", {
+      method: "POST",
+      body: { conversation_id: conversationId },
+    }),
+  reindex: () => api<MemoryStats>("/memories/reindex", { method: "POST" }),
+};
+
+// ------------------------------------------------------------------- documentos
+export const documentsApi = {
+  list: () => api<DocumentInfo[]>("/documents"),
+  get: (id: string) => api<DocumentInfo>(`/documents/${id}`),
+  upload: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return api<UploadResult>("/documents", { method: "POST", body: form });
+  },
+  remove: (id: string) => api<void>(`/documents/${id}`, { method: "DELETE" }),
+  reindex: (id: string) => api<DocumentInfo>(`/documents/${id}/reindex`, { method: "POST" }),
+  /** Descarga el original como Blob (el endpoint exige el token de acceso). */
+  download: async (doc: DocumentInfo) => {
+    const blob = await api<Blob>(`/documents/${doc.id}/file`, { responseType: "blob" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = doc.filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  },
 };
 
 // ------------------------------------------------------------------- otros

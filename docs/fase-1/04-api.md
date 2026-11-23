@@ -69,8 +69,9 @@ Cliente → servidor:
 
 ```jsonc
 { "type": "chat.send", "request_id": "uuid", "conversation_id": "uuid",
-  "content": "texto", "attachments": ["document_id"],
-  "model": "qwen3:8b", "params": { "temperature": 0.7 } }
+  "content": "texto", "attachments": ["document_id"],   // máx. 10, deben estar "ready"
+  "use_memory": true,                                    // consultar la memoria en este turno
+  "model": "qwen3:1.7b", "params": { "temperature": 0.7 } }
 { "type": "chat.regenerate", "request_id": "uuid", "conversation_id": "uuid", "model"?: "...", "params"?: {} }
 { "type": "chat.cancel", "request_id": "uuid" }
 { "type": "auth", "token": "..." }   // renovar el token sin reconectar
@@ -85,7 +86,7 @@ Servidor → cliente:
 { "type": "chat.started",  "request_id", "conversation_id", "message_id", "user_message_id", "model", "context_dropped_messages" }
 { "type": "chat.delta",    "request_id", "text": "..." }
 { "type": "chat.thinking", "request_id", "text": "..." }   // solo si think=true
-{ "type": "chat.context",  "request_id", "sources": [{ "kind": "memory|document", "id", "title", "locator" }] }
+{ "type": "chat.context",  "request_id", "sources": [{ "kind": "memory|document", "id", "title", "ref"?, "document_id"?, "location"?, "score" }], "warnings": ["..."] }
 { "type": "tool.call",     "request_id", "call_id", "tool", "arguments" }
 { "type": "tool.confirm_request", "request_id", "call_id", "tool", "summary", "risk_level", "expires_in": 120 }
 { "type": "tool.result",   "request_id", "call_id", "status": "ok|error|denied" }
@@ -106,7 +107,10 @@ Servidor → cliente:
 | PATCH | `/memories/{id}` | 👤 | Editar (reindexa el vector) |
 | DELETE | `/memories/{id}` | 👤 | Eliminar (SQL + vector) |
 | POST | `/memories/search` | 👤 | `{query, top_k}` → búsqueda semántica |
-| GET | `/memories/suggestions` | 👤 | Recuerdos propuestos por el extractor, pendientes de aprobar |
+| GET | `/memories/stats` | 👤 | `{active, suggested, unindexed}` |
+| POST | `/memories/reindex` | 👤 | Indexa los recuerdos que quedaron pendientes (Ollama apagado al crearlos) |
+| POST | `/memories/extract` | 👤 | `{conversation_id}` → el modelo propone recuerdos (quedan como sugerencias) |
+| GET | `/memories/suggestions` | 👤 | Recuerdos propuestos, pendientes de aprobar (no se indexan ni se usan) |
 | POST | `/memories/suggestions/{id}/accept` / `reject` | 👤 | — |
 | DELETE | `/memories` | 👤 | Borrar toda la memoria (requiere `{confirm:"DELETE"}`) |
 | GET | `/memories/export` | 👤 | Exportar mis datos (portabilidad) |
@@ -115,13 +119,14 @@ Servidor → cliente:
 
 | Método | Ruta | Permiso | Descripción |
 |--------|------|---------|-------------|
-| POST | `/documents` | 👤 | `multipart` → `202 {id, status:"pending"}` |
+| POST | `/documents` | 👤 | `multipart` (campo `file`, máx. `MILT_MAX_UPLOAD_BYTES`) → `201 {document, duplicate:false}`; si ya existe uno idéntico (SHA-256) → `200 {document, duplicate:true}`. Tipo por contenido: 415 si no coincide con la extensión |
 | GET | `/documents` | 👤 | Lista y estado |
 | GET | `/documents/{id}` | 👤 | Metadatos, número de fragmentos y error |
 | DELETE | `/documents/{id}` | 👤 | Borra el archivo, los fragmentos y los vectores |
 | POST | `/documents/{id}/reindex` | 👤 | Volver a procesar |
 | POST | `/documents/search` | 👤 | `{query, document_ids?, top_k}` → fragmentos con cita |
-| POST | `/documents/{id}/summary` | 👤 | Resumen (stream por WS o respuesta completa) |
+| GET | `/documents/{id}/file` | 👤 | Descarga el original (siempre `attachment`) |
+| — | *(resumen)* | 👤 | Se pide en el chat adjuntando el documento: si cabe en el contexto se incluye **entero**; si no, por búsqueda semántica |
 
 ## Herramientas y automatización
 

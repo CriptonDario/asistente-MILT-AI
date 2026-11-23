@@ -37,6 +37,7 @@ chatSocket.subscribe(onServerEvent);
 interface SendOptions {
   model?: string | null;
   params?: GenerationParams;
+  attachments?: string[];
 }
 
 function fail(requestId: string, error: unknown): void {
@@ -63,6 +64,7 @@ export function useChatActions() {
           content,
           ...(options.model ? { model: options.model } : {}),
           ...(options.params ? { params: options.params } : {}),
+          ...(options.attachments?.length ? { attachments: options.attachments } : {}),
         });
       } catch (error) {
         fail(requestId, error);

@@ -25,5 +25,8 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     css: false,
     restoreMocks: true,
+    // Equipos con poca RAM: hilos en lugar de procesos y como mucho 2 a la vez.
+    pool: "threads",
+    maxWorkers: 2,
   },
 });

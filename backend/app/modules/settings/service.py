@@ -15,7 +15,7 @@ from app.modules.settings.schemas import SettingsOut, SettingsUpdate
 async def get_or_create(db: AsyncSession, user_id: uuid.UUID) -> UserSettings:
     prefs = await db.get(UserSettings, user_id)
     if prefs is None:
-        prefs = UserSettings(user_id=user_id, theme="system", language="es")
+        prefs = UserSettings(user_id=user_id, theme="system", language="es", memory_enabled=True)
         db.add(prefs)
         await db.flush()
     return prefs
@@ -40,6 +40,8 @@ def to_out(prefs: UserSettings, settings: Settings) -> SettingsOut:
         default_model=prefs.default_model,
         effective_default_model=prefs.default_model or settings.default_model,
         generation_defaults=base_generation_params(settings, prefs),
+        memory_enabled=prefs.memory_enabled,
+        embedding_model=settings.embedding_model,
     )
 
 
@@ -52,6 +54,8 @@ async def update(db: AsyncSession, user_id: uuid.UUID, data: SettingsUpdate) -> 
         prefs.language = data.language
     if "default_model" in fields:
         prefs.default_model = data.default_model
+    if "memory_enabled" in fields and data.memory_enabled is not None:
+        prefs.memory_enabled = data.memory_enabled
     if "generation_defaults" in fields:
         prefs.generation_defaults = (
             data.generation_defaults.model_dump(exclude_none=True)

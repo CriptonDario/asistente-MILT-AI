@@ -4,10 +4,12 @@ import type { StreamState } from "../../stores/chat";
 import { Button } from "../ui/Button";
 import { AssistantShell } from "./MessageItem";
 import { Markdown } from "./Markdown";
+import { Sources } from "./Sources";
 
 const ERROR_HINTS: Record<string, string> = {
   provider_unavailable: "El motor local (Ollama) no responde. Comprueba que está abierto.",
   model_not_found: "Ese modelo no está instalado en Ollama.",
+  validation_error: "La solicitud no es válida.",
   insufficient_memory: "No hay memoria RAM suficiente para cargar el modelo.",
   context_overflow: "El mensaje es demasiado largo para el contexto del modelo.",
   connection_lost: "Se perdió la conexión con el servidor de MILT.",
@@ -75,6 +77,7 @@ export function StreamingMessage({ stream, onRetry, onDismiss }: StreamingMessag
       ) : (
         active && <Waiting since={stream.startedAt} />
       )}
+      <Sources sources={stream.sources} warnings={stream.warnings} />
     </AssistantShell>
   );
 }

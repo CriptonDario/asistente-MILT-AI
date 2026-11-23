@@ -3,6 +3,7 @@ import { Outlet, useNavigate } from "react-router";
 import { useSettings } from "../../hooks/queries";
 import { cn } from "../../lib/cn";
 import { useUi } from "../../stores/ui";
+import { DocumentsPanel } from "../documents/DocumentsPanel";
 import { MemoryPanel } from "../memory/MemoryPanel";
 import { SettingsPanel } from "../settings/SettingsPanel";
 import { Sidebar } from "./Sidebar";
@@ -60,6 +61,7 @@ export function AppShell() {
       </main>
       {panel === "settings" && <SettingsPanel />}
       {panel === "memory" && <MemoryPanel />}
+      {panel === "documents" && <DocumentsPanel />}
     </div>
   );
 }

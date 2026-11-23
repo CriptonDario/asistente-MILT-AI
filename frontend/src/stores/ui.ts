@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import type { Theme } from "../types/api";
 
-export type Panel = "settings" | "memory" | null;
+export type Panel = "settings" | "memory" | "documents" | null;
+export type MemoryTab = "memories" | "suggestions";
 
 const THEME_KEY = "milt.theme";
 
@@ -21,10 +22,11 @@ interface UiState {
   panel: Panel;
   /** Modelo elegido antes de crear la conversación. */
   draftModel: string | null;
+  memoryTab: MemoryTab;
   setTheme: (theme: Theme) => void;
   toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
-  openPanel: (panel: Panel) => void;
+  openPanel: (panel: Panel, memoryTab?: MemoryTab) => void;
   setDraftModel: (model: string | null) => void;
 }
 
@@ -33,6 +35,7 @@ export const useUi = create<UiState>()((set) => ({
   sidebarOpen: typeof window === "undefined" ? true : window.innerWidth >= 768,
   panel: null,
   draftModel: null,
+  memoryTab: "memories",
   setTheme: (theme) => {
     try {
       localStorage.setItem(THEME_KEY, theme);
@@ -43,6 +46,6 @@ export const useUi = create<UiState>()((set) => ({
   },
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
-  openPanel: (panel) => set({ panel }),
+  openPanel: (panel, memoryTab) => set((s) => ({ panel, memoryTab: memoryTab ?? s.memoryTab })),
   setDraftModel: (model) => set({ draftModel: model }),
 }));

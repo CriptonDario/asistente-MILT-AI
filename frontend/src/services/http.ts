@@ -99,6 +99,8 @@ export interface RequestOptions {
   signal?: AbortSignal;
   /** Adjuntar el access token (por defecto sí). */
   auth?: boolean;
+  /** "blob" para descargas binarias; por defecto se decide por el Content-Type. */
+  responseType?: "auto" | "blob";
 }
 
 function buildUrl(path: string, query?: RequestOptions["query"]): string {
@@ -121,16 +123,21 @@ async function parseError(response: Response): Promise<ApiError> {
 }
 
 export async function api<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = "GET", body, query, signal, auth = true } = options;
+  const { method = "GET", body, query, signal, auth = true, responseType = "auto" } = options;
 
+  const isForm = body instanceof FormData;
   const send = (token: string | null): Promise<Response> => {
     const headers: Record<string, string> = { Accept: "application/json" };
-    if (body !== undefined) headers["Content-Type"] = "application/json";
+    // Con FormData el navegador fija el Content-Type multipart con su boundary.
+    if (body !== undefined && !isForm) headers["Content-Type"] = "application/json";
     if (auth && token) headers.Authorization = `Bearer ${token}`;
+    let payload: BodyInit | undefined;
+    if (isForm) payload = body;
+    else if (body !== undefined) payload = JSON.stringify(body);
     return fetch(buildUrl(path, query), {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: payload,
       credentials: "include",
       signal,
     });
@@ -143,6 +150,7 @@ export async function api<T>(path: string, options: RequestOptions = {}): Promis
   }
   if (!response.ok) throw await parseError(response);
   if (response.status === 204) return undefined as T;
+  if (responseType === "blob") return (await response.blob()) as T;
   const type = response.headers.get("content-type") ?? "";
   if (type.includes("json")) return (await response.json()) as T;
   return (await response.text()) as T;

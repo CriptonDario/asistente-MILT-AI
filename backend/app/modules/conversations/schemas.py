@@ -51,6 +51,23 @@ MessageRole = Literal["system", "user", "assistant", "tool"]
 MessageStatus = Literal["complete", "cancelled", "error"]
 
 
+class ContextSource(BaseModel):
+    """Fuente usada para responder: un recuerdo o un fragmento de documento."""
+
+    kind: Literal["memory", "document"]
+    id: str
+    title: str
+    score: float | None = None
+    ref: int | None = None
+    document_id: str | None = None
+    location: str | None = None
+
+
+class AttachmentOut(BaseModel):
+    document_id: uuid.UUID
+    filename: str
+
+
 class MessageOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -63,6 +80,8 @@ class MessageOut(BaseModel):
     prompt_tokens: int | None
     completion_tokens: int | None
     latency_ms: int | None
+    context_sources: list[ContextSource] | None = None
+    attachments: list[AttachmentOut] = []
     created_at: datetime
 
 

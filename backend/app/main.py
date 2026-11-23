@@ -31,6 +31,7 @@ from app.core.state import AppState
 from app.db.migrate import run_migrations
 from app.db.session import create_engine, create_sessionmaker
 from app.llm.base import LLMProvider
+from app.llm.embeddings import EmbeddingService
 from app.llm.registry import ProviderRegistry, build_default_provider
 from app.modules.audit.router import router as audit_router
 from app.modules.audit.service import AuditService
@@ -41,6 +42,9 @@ from app.modules.chat.turns import TurnRegistry
 from app.modules.chat.ws import router as chat_ws_router
 from app.modules.conversations.router import router as conversations_router
 from app.modules.conversations.router import search_router
+from app.modules.documents.ingestion import IngestionWorker
+from app.modules.documents.router import router as documents_router
+from app.modules.memory.router import router as memory_router
 from app.modules.models_catalog.router import router as models_router
 from app.modules.settings.router import router as settings_router
 from app.modules.system.router import router as system_router
@@ -48,6 +52,7 @@ from app.modules.users.router import router as users_router
 from app.security.passwords import PasswordService
 from app.security.secrets_store import load_or_create_jwt_secret
 from app.security.tokens import TokenService
+from app.vector.qdrant_store import QdrantVectorStore
 
 API_PREFIX = "/api/v1"
 
@@ -74,6 +79,13 @@ def create_app(
         provider = factory(settings)
         registry = ProviderRegistry([provider], default=provider.name)
         turns = TurnRegistry(max_per_user=settings.chat_max_turns_per_user)
+        vectors = QdrantVectorStore(path=settings.vector_path, url=settings.vector_url)
+        embeddings = EmbeddingService(
+            provider, model=settings.embedding_model, batch_size=settings.embedding_batch_size
+        )
+        ingestion = IngestionWorker(
+            settings=settings, sessionmaker=sessionmaker, vectors=vectors, embeddings=embeddings
+        )
         app.state.milt = AppState(
             settings=settings,
             engine=engine,
@@ -94,7 +106,11 @@ def create_app(
             audit=AuditService(sessionmaker),
             llm=registry,
             turns=turns,
+            vectors=vectors,
+            embeddings=embeddings,
+            ingestion=ingestion,
         )
+        await ingestion.start()
         log.info(
             "startup",
             version=__version__,
@@ -107,6 +123,8 @@ def create_app(
             yield
         finally:
             await turns.cancel_all()
+            await ingestion.stop()
+            await vectors.aclose()
             await registry.aclose()
             await engine.dispose()
             log.info("shutdown")
@@ -125,7 +143,12 @@ def create_app(
     register_exception_handlers(app)
 
     # Orden: el último añadido es el más externo.
-    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_body_bytes)
+    app.add_middleware(
+        BodySizeLimitMiddleware,
+        max_bytes=settings.max_body_bytes,
+        # La subida de documentos admite más; el resto de la API sigue limitada.
+        path_limits={f"{API_PREFIX}/documents": settings.max_upload_bytes + 64 * 1024},
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -152,6 +175,8 @@ def create_app(
         search_router,
         chat_sse_router,
         chat_ws_router,
+        memory_router,
+        documents_router,
         audit_router,
     ):
         api.include_router(router)

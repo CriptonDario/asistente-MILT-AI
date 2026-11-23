@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { ChatUsage, ServerEvent } from "../types/api";
+import type { ChatUsage, ContextSource, ServerEvent } from "../types/api";
 
 export type StreamStatus = "pending" | "streaming" | "done" | "cancelled" | "error";
 
@@ -18,6 +18,9 @@ export interface StreamState {
   error: { code: string; detail: string } | null;
   usage: ChatUsage | null;
   startedAt: number;
+  /** Recuerdos y fragmentos de documentos usados para responder. */
+  sources: ContextSource[];
+  warnings: string[];
 }
 
 export function newStream(
@@ -38,6 +41,8 @@ export function newStream(
     error: null,
     usage: null,
     startedAt: Date.now(),
+    sources: [],
+    warnings: [],
   };
 }
 
@@ -56,6 +61,8 @@ export function reduceStream(state: StreamState, event: ServerEvent): StreamStat
         userMessageId: event.user_message_id,
         model: event.model,
       };
+    case "chat.context":
+      return { ...state, sources: event.sources, warnings: event.warnings };
     case "chat.delta":
       return { ...state, status: "streaming", text: state.text + event.text };
     case "chat.thinking":
