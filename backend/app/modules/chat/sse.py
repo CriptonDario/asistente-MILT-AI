@@ -45,6 +45,9 @@ async def chat_completions(
         request_id=request_id,
         user_id=auth.user.id,
         user_name=auth.user.display_name,
+        user_role=auth.user.role,
+        # SSE no admite confirmaciones a mitad del turno: solo herramientas automáticas.
+        can_confirm=False,
         conversation_id=body.conversation_id,
         content=body.content,
         model=body.model,

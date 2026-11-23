@@ -26,6 +26,9 @@ dependencies = [
 [project.optional-dependencies]
 # Perfil servidor (PostgreSQL). No se necesita en local.
 server = ["asyncpg>=0.29"]
+voice = [
+    "faster-whisper>=1.0",
+]
 
 [dependency-groups]
 dev = [
@@ -67,6 +70,7 @@ ignore = [
     "RUF003",
     "UP046",  # Generic[T] explícito: más claro con modelos genéricos de Pydantic
     "PT018",  # se permiten aserciones compuestas en pruebas
+    "ASYNC240", # comprobaciones de metadatos (is_file/stat) puntuales y rápidas
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -78,6 +82,11 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 exclude = ["migrations/versions/"]
+
+[[tool.mypy.overrides]]
+# Dependencia opcional sin tipos publicados.
+module = ["faster_whisper", "faster_whisper.*"]
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["tests.*"]

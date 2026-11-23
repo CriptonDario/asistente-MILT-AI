@@ -64,6 +64,7 @@ class ConversationService:
             model=data.model,
             agent_profile=data.agent_profile,
             params=data.params.model_dump(exclude_none=True) if data.params else None,
+            tools_enabled=data.tools_enabled,
             updated_hlc=self.hlc.now(),
         )
         self.db.add(conv)
@@ -117,6 +118,8 @@ class ConversationService:
             conv.pinned = data.pinned
         if "archived" in fields and data.archived is not None:
             conv.archived = data.archived
+        if "tools_enabled" in fields and data.tools_enabled is not None:
+            conv.tools_enabled = data.tools_enabled
         conv.touch(self.hlc.now())
         await self.db.commit()
         return conv

@@ -14,12 +14,28 @@ from pydantic import SecretStr
 from app.core.config import Settings
 from app.llm.fake_provider import DEFAULT_FAKE_MODEL, FakeLLMProvider
 from app.main import create_app
+from app.modules.voice.service import VoiceService
 
 API = "/api/v1"
 ADMIN_EMAIL = "admin@milt.local"
 ADMIN_PASSWORD = "Clave-Segura-Admin-2026"
 USER_EMAIL = "usuario@milt.local"
 USER_PASSWORD = "Clave-Segura-Usuario-2026"
+
+
+class FakeTranscriber:
+    """Transcriptor simulado: las pruebas no cargan Whisper."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Path, str]] = []
+
+    def transcribe(self, path: Path, language: str) -> str:
+        self.calls.append((path, language))
+        return "hola milt"
+
+
+def fake_voice(settings: Settings) -> VoiceService:
+    return VoiceService(settings, transcriber=FakeTranscriber())
 
 
 @pytest.fixture
@@ -64,7 +80,7 @@ def fake_llm() -> FakeLLMProvider:
 
 @pytest.fixture
 def app(settings: Settings, fake_llm: FakeLLMProvider) -> FastAPI:
-    return create_app(settings, provider_factory=lambda _s: fake_llm)
+    return create_app(settings, provider_factory=lambda _s: fake_llm, voice_factory=fake_voice)
 
 
 @pytest.fixture
@@ -81,7 +97,9 @@ def client_factory(tmp_path: Path) -> Iterator[Callable[..., TestClient]]:
     def factory(provider: Any = None, **overrides: Any) -> TestClient:
         settings = make_settings(tmp_path, **overrides)
         llm = provider or FakeLLMProvider()
-        test_client = TestClient(create_app(settings, provider_factory=lambda _s: llm))
+        test_client = TestClient(
+            create_app(settings, provider_factory=lambda _s: llm, voice_factory=fake_voice)
+        )
         test_client.__enter__()
         opened.append(test_client)
         return test_client

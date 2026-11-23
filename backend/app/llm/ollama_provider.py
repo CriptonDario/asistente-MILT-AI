@@ -107,6 +107,8 @@ class OllamaProvider:
         out: dict[str, Any] = {"role": message.role, "content": message.content}
         if message.tool_calls:
             out["tool_calls"] = message.tool_calls
+        if message.tool_name:
+            out["tool_name"] = message.tool_name
         return out
 
     @staticmethod

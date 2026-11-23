@@ -19,6 +19,9 @@ if TYPE_CHECKING:
     from app.modules.audit.service import AuditService
     from app.modules.chat.turns import TurnRegistry
     from app.modules.documents.ingestion import IngestionWorker
+    from app.modules.voice.service import VoiceService
+    from app.tools.executor import ConfirmationRegistry, ToolExecutor
+    from app.tools.registry import ToolRegistry
     from app.vector.base import VectorStore
 
 
@@ -37,5 +40,9 @@ class AppState:
     vectors: VectorStore
     embeddings: EmbeddingService
     ingestion: IngestionWorker
+    tools: ToolRegistry
+    confirmations: ConfirmationRegistry
+    tool_executor: ToolExecutor
+    voice: VoiceService
     #: El token de arranque de la app de escritorio es de un solo uso por proceso.
     local_bootstrap_consumed: bool = False

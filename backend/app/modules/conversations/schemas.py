@@ -20,6 +20,7 @@ class ConversationCreate(BaseModel):
     model: str | None = Field(default=None, pattern=MODEL_NAME_PATTERN)
     agent_profile: AgentProfileName = "general"
     params: GenerationParams | None = None
+    tools_enabled: bool = False
 
 
 class ConversationUpdate(BaseModel):
@@ -31,6 +32,7 @@ class ConversationUpdate(BaseModel):
     params: GenerationParams | None = None
     pinned: bool | None = None
     archived: bool | None = None
+    tools_enabled: bool | None = None
 
 
 class ConversationOut(BaseModel):
@@ -43,6 +45,7 @@ class ConversationOut(BaseModel):
     params: dict[str, Any] | None
     pinned: bool
     archived: bool
+    tools_enabled: bool
     created_at: datetime
     updated_at: datetime
 
@@ -81,6 +84,8 @@ class MessageOut(BaseModel):
     completion_tokens: int | None
     latency_ms: int | None
     context_sources: list[ContextSource] | None = None
+    #: Herramientas usadas en la respuesta: [{call_id, tool, risk, status, decision, summary}]
+    tool_calls: list[dict[str, Any]] | None = None
     attachments: list[AttachmentOut] = []
     created_at: datetime
 

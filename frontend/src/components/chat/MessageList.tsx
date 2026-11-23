@@ -12,6 +12,7 @@ interface MessageListProps {
   onRegenerate: () => void;
   onDeleteMessage: (id: string) => void;
   onDismissStream: () => void;
+  onConfirmTool?: (callId: string, approved: boolean) => void;
 }
 
 /** Une los mensajes guardados con la respuesta en curso, sin duplicados. */
@@ -30,6 +31,7 @@ export function MessageList({
   onRegenerate,
   onDeleteMessage,
   onDismissStream,
+  onConfirmTool,
 }: MessageListProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
@@ -75,7 +77,12 @@ export function MessageList({
           ))}
           {showOptimisticUser && stream?.userContent && <UserBubble content={stream.userContent} />}
           {showStream && stream && (
-            <StreamingMessage stream={stream} onRetry={onRegenerate} onDismiss={onDismissStream} />
+            <StreamingMessage
+              stream={stream}
+              onRetry={onRegenerate}
+              onDismiss={onDismissStream}
+              onConfirmTool={onConfirmTool}
+            />
           )}
         </div>
       </div>

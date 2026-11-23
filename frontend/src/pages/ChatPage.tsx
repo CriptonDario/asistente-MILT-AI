@@ -14,7 +14,9 @@ import {
   useSettings,
   useUpdateConversation,
   useUploadDocument,
+  useVoiceStatus,
 } from "../hooks/queries";
+import { voiceApi } from "../services/endpoints";
 import { useChatActions, useStream } from "../hooks/useChat";
 import { errorMessage } from "../services/http";
 import { isActive } from "../stores/chat";
@@ -34,8 +36,9 @@ export function ChatPage() {
   const createConversation = useCreateConversation();
   const updateConversation = useUpdateConversation();
   const deleteMessage = useDeleteMessage(conversationId ?? "");
-  const { send, regenerate, cancel, dismiss } = useChatActions();
+  const { send, regenerate, cancel, dismiss, confirmTool } = useChatActions();
   const documents = useDocuments();
+  const voice = useVoiceStatus();
   const uploadDocument = useUploadDocument();
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -95,6 +98,7 @@ export function ChatPage() {
           onRegenerate={() => void regenerate(conversationId)}
           onDeleteMessage={(id) => deleteMessage.mutate(id)}
           onDismissStream={() => dismiss(conversationId)}
+          onConfirmTool={confirmTool}
         />
       )}
 
@@ -112,6 +116,11 @@ export function ChatPage() {
           disabled={Boolean(notFound) || createConversation.isPending}
           documents={documents.data ?? []}
           onUpload={async (file) => (await uploadDocument.mutateAsync(file)).document}
+          onTranscribe={
+            voice.data?.stt_available
+              ? async (audio) => (await voiceApi.transcribe(audio)).text
+              : undefined
+          }
         />
         <p className="mx-auto mt-2 max-w-3xl text-center text-[11px] text-muted">
           MILT puede equivocarse. Verifica la información importante.

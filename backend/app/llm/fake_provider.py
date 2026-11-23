@@ -21,6 +21,7 @@ from app.llm.base import (
     ModelNotFoundError,
     ProviderHealth,
     TextDelta,
+    ToolCallRequest,
     Usage,
 )
 
@@ -48,6 +49,8 @@ class FakeLLMProvider:
         self.embed_calls = 0
         self.embed_fail_with: Exception | None = None
         self.embed_delay = 0.0
+        #: Cada elemento es una "vuelta" en la que el modelo pide esas herramientas.
+        self.tool_rounds: list[list[ToolCallRequest]] = []
 
     async def health(self) -> ProviderHealth:
         return ProviderHealth(ok=True, provider=self.name, version="fake", latency_ms=0)
@@ -80,6 +83,12 @@ class FakeLLMProvider:
         self.calls.append({"messages": messages, "model": model, "params": params, "tools": tools})
         if self.fail_with is not None:
             raise self.fail_with
+        # Guion de herramientas: si se ofrecen, la siguiente "vuelta" pide estas llamadas.
+        if tools and self.tool_rounds:
+            for call in self.tool_rounds.pop(0):
+                yield call
+            yield Done(usage=Usage(prompt_tokens=10, completion_tokens=1), done_reason="stop")
+            return
         words = re.findall(r"\S+\s*", self.reply)
         for word in words:
             if self.delay:

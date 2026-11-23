@@ -1,8 +1,10 @@
 import { Check, Copy, RotateCcw, Trash } from "lucide-react";
 import { useState } from "react";
 import { formatDuration } from "../../lib/format";
-import type { Attachment, Message } from "../../types/api";
+import type { Attachment, Message, ToolCallLog } from "../../types/api";
 import { AttachmentChips, Sources } from "./Sources";
+import { SpeakButton } from "./SpeakButton";
+import { ToolCalls } from "./ToolCalls";
 import { IconButton } from "../ui/Button";
 import { Logo } from "../ui/Logo";
 import { Markdown } from "./Markdown";
@@ -94,10 +96,12 @@ export function MessageItem({ message, isLast, busy, onRegenerate, onDelete }: M
           {message.status === "error" ? "Respuesta incompleta por un error" : "Respuesta interrumpida"}
         </div>
       )}
+      <ToolCalls tools={(message.tool_calls ?? []) as unknown as ToolCallLog[]} />
       <Markdown text={message.content} />
       <Sources sources={message.context_sources ?? []} />
       <div className="group mt-1 flex items-center gap-1 text-xs text-muted">
         <CopyButton text={message.content} />
+        <SpeakButton text={message.content} />
         {isLast && (
           <IconButton
             label="Regenerar respuesta"

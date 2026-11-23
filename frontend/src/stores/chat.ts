@@ -21,6 +21,35 @@ export interface StreamState {
   /** Recuerdos y fragmentos de documentos usados para responder. */
   sources: ContextSource[];
   warnings: string[];
+  /** Herramientas que el modelo ha pedido usar en este turno. */
+  tools: ToolCallView[];
+}
+
+export type ToolCallStatus = "running" | "awaiting" | "ok" | "error" | "denied";
+
+export interface ToolCallView {
+  callId: string;
+  tool: string;
+  risk: string;
+  summary: string;
+  arguments: Record<string, unknown>;
+  status: ToolCallStatus;
+  resultSummary: string | null;
+  /** Instante (ms epoch) en que caduca la confirmación pendiente. */
+  expiresAt: number | null;
+}
+
+function upsertTool(
+  tools: ToolCallView[],
+  callId: string,
+  patch: Partial<ToolCallView>,
+  base?: ToolCallView,
+): ToolCallView[] {
+  const index = tools.findIndex((t) => t.callId === callId);
+  if (index === -1) return base ? [...tools, { ...base, ...patch }] : tools;
+  const next = [...tools];
+  next[index] = { ...next[index]!, ...patch };
+  return next;
 }
 
 export function newStream(
@@ -43,6 +72,7 @@ export function newStream(
     startedAt: Date.now(),
     sources: [],
     warnings: [],
+    tools: [],
   };
 }
 
@@ -63,6 +93,43 @@ export function reduceStream(state: StreamState, event: ServerEvent): StreamStat
       };
     case "chat.context":
       return { ...state, sources: event.sources, warnings: event.warnings };
+    case "tool.call":
+      return {
+        ...state,
+        tools: upsertTool(
+          state.tools,
+          event.call_id,
+          { status: "running" },
+          {
+            callId: event.call_id,
+            tool: event.tool,
+            risk: event.risk,
+            summary: event.summary,
+            arguments: event.arguments,
+            status: "running",
+            resultSummary: null,
+            expiresAt: null,
+          },
+        ),
+      };
+    case "tool.confirm_request":
+      return {
+        ...state,
+        tools: upsertTool(state.tools, event.call_id, {
+          status: "awaiting",
+          summary: event.summary,
+          expiresAt: Date.now() + event.expires_in * 1000,
+        }),
+      };
+    case "tool.result":
+      return {
+        ...state,
+        tools: upsertTool(state.tools, event.call_id, {
+          status: event.status,
+          resultSummary: event.summary,
+          expiresAt: null,
+        }),
+      };
     case "chat.delta":
       return { ...state, status: "streaming", text: state.text + event.text };
     case "chat.thinking":
@@ -83,6 +150,8 @@ interface ChatStore {
   begin: (stream: StreamState) => void;
   apply: (event: ServerEvent) => StreamState | null;
   remove: (conversationId: string, requestId: string) => void;
+  /** Marca una confirmación como respondida (optimista, antes de que llegue el resultado). */
+  markAnswered: (callId: string, approved: boolean) => void;
 }
 
 export const useChatStore = create<ChatStore>()((set, get) => ({
@@ -98,6 +167,16 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
     }
     return next;
   },
+  markAnswered: (callId, approved) =>
+    set((s) => {
+      const entry = Object.values(s.streams).find((st) => st.tools.some((t) => t.callId === callId));
+      if (!entry) return s;
+      const tools = upsertTool(entry.tools, callId, {
+        status: approved ? "running" : "denied",
+        expiresAt: null,
+      });
+      return { streams: { ...s.streams, [entry.conversationId]: { ...entry, tools } } };
+    }),
   remove: (conversationId, requestId) =>
     set((s) => {
       if (s.streams[conversationId]?.requestId !== requestId) return s;

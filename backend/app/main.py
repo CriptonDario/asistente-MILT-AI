@@ -37,6 +37,7 @@ from app.modules.audit.router import router as audit_router
 from app.modules.audit.service import AuditService
 from app.modules.auth.router import router as auth_router
 from app.modules.auth.router import sessions_router
+from app.modules.automation.router import router as automation_router
 from app.modules.chat.sse import router as chat_sse_router
 from app.modules.chat.turns import TurnRegistry
 from app.modules.chat.ws import router as chat_ws_router
@@ -49,9 +50,13 @@ from app.modules.models_catalog.router import router as models_router
 from app.modules.settings.router import router as settings_router
 from app.modules.system.router import router as system_router
 from app.modules.users.router import router as users_router
+from app.modules.voice.router import router as voice_router
+from app.modules.voice.service import VoiceService
 from app.security.passwords import PasswordService
 from app.security.secrets_store import load_or_create_jwt_secret
 from app.security.tokens import TokenService
+from app.tools.executor import ConfirmationRegistry, ToolExecutor
+from app.tools.registry import default_registry
 from app.vector.qdrant_store import QdrantVectorStore
 
 API_PREFIX = "/api/v1"
@@ -62,7 +67,10 @@ ProviderFactory = Callable[[Settings], LLMProvider]
 
 
 def create_app(
-    settings: Settings | None = None, *, provider_factory: ProviderFactory | None = None
+    settings: Settings | None = None,
+    *,
+    provider_factory: ProviderFactory | None = None,
+    voice_factory: Callable[[Settings], VoiceService] | None = None,
 ) -> FastAPI:
     settings = settings or Settings()
     factory = provider_factory or build_default_provider
@@ -86,6 +94,8 @@ def create_app(
         ingestion = IngestionWorker(
             settings=settings, sessionmaker=sessionmaker, vectors=vectors, embeddings=embeddings
         )
+        tools = default_registry()
+        confirmations = ConfirmationRegistry()
         app.state.milt = AppState(
             settings=settings,
             engine=engine,
@@ -109,6 +119,10 @@ def create_app(
             vectors=vectors,
             embeddings=embeddings,
             ingestion=ingestion,
+            tools=tools,
+            confirmations=confirmations,
+            tool_executor=ToolExecutor(tools, confirmations),
+            voice=voice_factory(settings) if voice_factory else VoiceService(settings),
         )
         await ingestion.start()
         log.info(
@@ -147,7 +161,10 @@ def create_app(
         BodySizeLimitMiddleware,
         max_bytes=settings.max_body_bytes,
         # La subida de documentos admite más; el resto de la API sigue limitada.
-        path_limits={f"{API_PREFIX}/documents": settings.max_upload_bytes + 64 * 1024},
+        path_limits={
+            f"{API_PREFIX}/documents": settings.max_upload_bytes + 64 * 1024,
+            f"{API_PREFIX}/voice/transcribe": settings.voice_max_upload_bytes + 64 * 1024,
+        },
     )
     app.add_middleware(
         CORSMiddleware,
@@ -177,6 +194,8 @@ def create_app(
         chat_ws_router,
         memory_router,
         documents_router,
+        automation_router,
+        voice_router,
         audit_router,
     ):
         api.include_router(router)

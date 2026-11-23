@@ -60,6 +60,13 @@ export class ChatSocket {
     }
   }
 
+  /** Responde a una petición de confirmación de herramienta. */
+  confirmTool(callId: string, approved: boolean): boolean {
+    if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    this.write({ type: "tool.confirm", call_id: callId, approved });
+    return true;
+  }
+
   cancel(requestId: string): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.write({ type: "chat.cancel", request_id: requestId });

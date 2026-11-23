@@ -109,8 +109,8 @@ async def capabilities(state: StateDep, _auth: AuthDep) -> CapabilitiesOut:
         providers=[p.name for p in state.llm.all()],
         memory=True,
         documents=True,
-        tools=False,
-        voice=False,
+        tools=True,
+        voice=state.voice.stt_available,
         sync=False,
         remote_access=False,
     )

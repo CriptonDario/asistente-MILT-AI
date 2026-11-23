@@ -16,6 +16,8 @@ async function settle(conversationId: string, requestId: string, removeStream: b
     queryClient.invalidateQueries({ queryKey: queryKeys.messages(conversationId) }),
     queryClient.invalidateQueries({ queryKey: queryKeys.conversation(conversationId) }),
     queryClient.invalidateQueries({ queryKey: queryKeys.conversations }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.toolExecutions }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.reports }),
   ]);
   if (removeStream) useChatStore.getState().remove(conversationId, requestId);
 }
@@ -95,6 +97,12 @@ export function useChatActions() {
     if (stream && isActive(stream)) chatSocket.cancel(stream.requestId);
   }, []);
 
+  const confirmTool = useCallback((callId: string, approved: boolean) => {
+    if (chatSocket.confirmTool(callId, approved)) {
+      useChatStore.getState().markAnswered(callId, approved);
+    }
+  }, []);
+
   const dismiss = useCallback((conversationId: string) => {
     const stream = useChatStore.getState().streams[conversationId];
     if (stream && !isActive(stream)) {
@@ -102,7 +110,7 @@ export function useChatActions() {
     }
   }, []);
 
-  return { send, regenerate, cancel, dismiss };
+  return { send, regenerate, cancel, dismiss, confirmTool };
 }
 
 export function useStream(conversationId: string | undefined) {
