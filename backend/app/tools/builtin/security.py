@@ -255,6 +255,10 @@ class IocMatchTool(Tool[IocMatchArgs]):
             is_text = bool(textual)
             first = True
             number = 1
+            # Final del fragmento anterior de la MISMA línea: un indicador puede caer justo
+            # en la frontera entre dos fragmentos. 4 bytes por carácter como máximo (UTF-8).
+            overlap = 4 * max((len(v) for v in textual), default=0)
+            carry = b""
             with path.open("rb") as fh:
                 while piece := fh.readline(64 * 1024):
                     for hasher in hashers.values():
@@ -263,10 +267,14 @@ class IocMatchTool(Tool[IocMatchArgs]):
                         is_text = is_text and not _is_binary(piece)
                         first = False
                     if is_text:
-                        lowered = decode_text(piece).lower()
+                        lowered = decode_text(carry + piece).lower()
+                        ended = piece.endswith(b"\n")
+                        carry = b"" if ended else (carry + piece)[-overlap:]
+                        place = f"{guard.display(path)}:{number}"
                         for value in textual:
-                            if value in lowered and len(hits[value]) < 10:
-                                hits[value].append(f"{guard.display(path)}:{number}")
+                            found = hits[value]
+                            if value in lowered and len(found) < 10 and place not in found:
+                                found.append(place)
                     if piece.endswith(b"\n"):
                         number += 1
             for value, kind in hashes.items():
@@ -279,7 +287,7 @@ class IocMatchTool(Tool[IocMatchArgs]):
             total = 0
             files: list[Path] = [root] if root.is_file() else []
             if root.is_dir():
-                for current, _dirnames, filenames in TreeWalker(root):
+                for current, _dirnames, filenames in TreeWalker(root, skip_hidden=False):
                     files += [current / f for f in filenames]
                     if len(files) > MAX_IOC_FILES:
                         break

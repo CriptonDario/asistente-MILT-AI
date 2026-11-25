@@ -100,11 +100,15 @@ class TreeWalker:
 
     No sigue enlaces simbólicos ni *junctions* (``os.walk`` sí entra en las junctions de
     Windows, que pueden apuntar fuera de la carpeta autorizada o formar ciclos), salta
-    ``SKIP_DIRS`` y las carpetas ocultas y se detiene tras ``max_entries`` entradas.
+    ``SKIP_DIRS`` y (salvo ``skip_hidden=False``) las ocultas, y se detiene tras
+    ``max_entries`` entradas.
     """
 
-    def __init__(self, root: Path, *, max_entries: int = MAX_WALK_ENTRIES) -> None:
+    def __init__(
+        self, root: Path, *, max_entries: int = MAX_WALK_ENTRIES, skip_hidden: bool = True
+    ) -> None:
         self.root = root
+        self.skip_hidden = skip_hidden
         self.max_entries = max_entries
         self.visited = 0
         self.truncated = False
@@ -126,7 +130,8 @@ class TreeWalker:
                             if entry.is_symlink() or entry.is_junction():
                                 continue
                             if entry.is_dir(follow_symlinks=False):
-                                if entry.name not in SKIP_DIRS and not entry.name.startswith("."):
+                                hidden = self.skip_hidden and entry.name.startswith(".")
+                                if entry.name not in SKIP_DIRS and not hidden:
                                     dirnames.append(entry.name)
                             elif entry.is_file(follow_symlinks=False):
                                 filenames.append(entry.name)
