@@ -35,9 +35,9 @@ describe("Composer", () => {
     expect(onStop).toHaveBeenCalledOnce();
   });
 
-  it("el micrófono sigue deshabilitado hasta la Fase 5", () => {
+  it("sin reconocimiento de voz el micrófono queda desactivado", () => {
     render(<Composer onSend={vi.fn()} onStop={vi.fn()} streaming={false} />);
-    expect(screen.getByRole("button", { name: /Hablar/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Voz no disponible" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Adjuntar documentos" })).toBeEnabled();
   });
 

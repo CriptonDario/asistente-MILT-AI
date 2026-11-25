@@ -112,4 +112,5 @@ def test_system_info(client: TestClient, admin_token: str) -> None:
     assert info["database"] == {"ok": True, "detail": "sqlite", "version": None, "latency_ms": None}
     caps = client.get(f"{API}/system/capabilities", headers=auth_headers(admin_token)).json()
     assert caps["chat"] is True
-    assert caps["tools"] is False
+    assert caps["tools"] is True
+    assert caps["memory"] is True and caps["documents"] is True

@@ -57,8 +57,16 @@ class WsChatCancel(_Strict):
     request_id: RequestId
 
 
+class WsToolConfirm(_Strict):
+    """Respuesta del usuario a ``tool.confirm_request``."""
+
+    type: Literal["tool.confirm"]
+    call_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")]
+    approved: bool
+
+
 ClientMessage = Annotated[
-    WsAuth | WsPing | WsChatSend | WsChatRegenerate | WsChatCancel,
+    WsAuth | WsPing | WsChatSend | WsChatRegenerate | WsChatCancel | WsToolConfirm,
     Field(discriminator="type"),
 ]
 client_message_adapter: TypeAdapter[ClientMessage] = TypeAdapter(ClientMessage)

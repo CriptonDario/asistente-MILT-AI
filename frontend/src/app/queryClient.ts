@@ -28,4 +28,10 @@ export const queryKeys = {
   memorySuggestions: ["memory-suggestions"] as const,
   memoryStats: ["memory-stats"] as const,
   documents: ["documents"] as const,
+  tools: ["tools"] as const,
+  toolRoots: ["tool-roots"] as const,
+  toolExecutions: ["tool-executions"] as const,
+  scripts: ["scripts"] as const,
+  reports: ["reports"] as const,
+  voice: ["voice"] as const,
 };

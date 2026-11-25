@@ -2041,6 +2041,543 @@
     }
    }
   },
+  "/api/v1/tools": {
+   "get": {
+    "tags": [
+     "tools"
+    ],
+    "summary": "List Tools",
+    "operationId": "list_tools_api_v1_tools_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/ToolOut"
+         },
+         "type": "array",
+         "title": "Response List Tools Api V1 Tools Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/tools/policies/{name}": {
+   "put": {
+    "tags": [
+     "tools"
+    ],
+    "summary": "Update Policy",
+    "operationId": "update_policy_api_v1_tools_policies__name__put",
+    "parameters": [
+     {
+      "name": "name",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Name"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PolicyUpdate"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ToolOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/tools/executions": {
+   "get": {
+    "tags": [
+     "tools"
+    ],
+    "summary": "List Executions",
+    "operationId": "list_executions_api_v1_tools_executions_get",
+    "parameters": [
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 200,
+       "minimum": 1,
+       "default": 50,
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/ExecutionOut"
+         },
+         "title": "Response List Executions Api V1 Tools Executions Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/settings/allowed-roots": {
+   "get": {
+    "tags": [
+     "tools"
+    ],
+    "summary": "Get Allowed Roots",
+    "operationId": "get_allowed_roots_api_v1_settings_allowed_roots_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AllowedRoots"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "tags": [
+     "tools"
+    ],
+    "summary": "Set Allowed Roots",
+    "description": "Carpetas a las que pueden acceder las herramientas (solo en el equipo local).",
+    "operationId": "set_allowed_roots_api_v1_settings_allowed_roots_put",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/AllowedRoots"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AllowedRoots"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/automation/scripts": {
+   "get": {
+    "tags": [
+     "tools"
+    ],
+    "summary": "List Scripts",
+    "operationId": "list_scripts_api_v1_automation_scripts_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/ScriptOut"
+         },
+         "type": "array",
+         "title": "Response List Scripts Api V1 Automation Scripts Get"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "tools"
+    ],
+    "summary": "Register Script",
+    "description": "Solo administradores: autoriza un script por ruta y hash (lista blanca).",
+    "operationId": "register_script_api_v1_automation_scripts_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/ScriptCreate"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "201": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ScriptOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/automation/scripts/{script_id}/reauthorize": {
+   "post": {
+    "tags": [
+     "tools"
+    ],
+    "summary": "Reauthorize Script",
+    "description": "Acepta la versión actual del archivo tras revisarla (recalcula el hash).",
+    "operationId": "reauthorize_script_api_v1_automation_scripts__script_id__reauthorize_post",
+    "parameters": [
+     {
+      "name": "script_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Script Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ScriptOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/automation/scripts/{script_id}": {
+   "delete": {
+    "tags": [
+     "tools"
+    ],
+    "summary": "Delete Script",
+    "operationId": "delete_script_api_v1_automation_scripts__script_id__delete",
+    "parameters": [
+     {
+      "name": "script_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Script Id"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Successful Response"
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/security/reports": {
+   "get": {
+    "tags": [
+     "tools"
+    ],
+    "summary": "List Reports",
+    "operationId": "list_reports_api_v1_security_reports_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "items": {
+          "$ref": "#/components/schemas/ReportSummary"
+         },
+         "type": "array",
+         "title": "Response List Reports Api V1 Security Reports Get"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/security/reports/{report_id}": {
+   "get": {
+    "tags": [
+     "tools"
+    ],
+    "summary": "Get Report",
+    "operationId": "get_report_api_v1_security_reports__report_id__get",
+    "parameters": [
+     {
+      "name": "report_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Report Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ReportOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "tags": [
+     "tools"
+    ],
+    "summary": "Delete Report",
+    "operationId": "delete_report_api_v1_security_reports__report_id__delete",
+    "parameters": [
+     {
+      "name": "report_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Report Id"
+      }
+     }
+    ],
+    "responses": {
+     "204": {
+      "description": "Successful Response"
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/security/reports/{report_id}/markdown": {
+   "get": {
+    "tags": [
+     "tools"
+    ],
+    "summary": "Download Report",
+    "operationId": "download_report_api_v1_security_reports__report_id__markdown_get",
+    "parameters": [
+     {
+      "name": "report_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "uuid",
+       "title": "Report Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {}
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/voice/status": {
+   "get": {
+    "tags": [
+     "voice"
+    ],
+    "summary": "Voice Status",
+    "operationId": "voice_status_api_v1_voice_status_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/VoiceStatusOut"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/voice/transcribe": {
+   "post": {
+    "tags": [
+     "voice"
+    ],
+    "summary": "Transcribe",
+    "operationId": "transcribe_api_v1_voice_transcribe_post",
+    "requestBody": {
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_transcribe_api_v1_voice_transcribe_post"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TranscriptionOut"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/v1/audit": {
    "get": {
     "tags": [
@@ -2167,6 +2704,26 @@
  },
  "components": {
   "schemas": {
+   "AllowedRoots": {
+    "properties": {
+     "roots": {
+      "items": {
+       "type": "string",
+       "maxLength": 1000,
+       "minLength": 1
+      },
+      "type": "array",
+      "maxItems": 20,
+      "title": "Roots"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+     "roots"
+    ],
+    "title": "AllowedRoots"
+   },
    "AttachmentOut": {
     "properties": {
      "document_id": {
@@ -2306,6 +2863,20 @@
      "broken_at_id"
     ],
     "title": "AuditVerifyOut"
+   },
+   "Body_transcribe_api_v1_voice_transcribe_post": {
+    "properties": {
+     "audio": {
+      "type": "string",
+      "contentMediaType": "application/octet-stream",
+      "title": "Audio"
+     }
+    },
+    "type": "object",
+    "required": [
+     "audio"
+    ],
+    "title": "Body_transcribe_api_v1_voice_transcribe_post"
    },
    "Body_upload_document_api_v1_documents_post": {
     "properties": {
@@ -2650,6 +3221,11 @@
         "type": "null"
        }
       ]
+     },
+     "tools_enabled": {
+      "type": "boolean",
+      "title": "Tools Enabled",
+      "default": false
      }
     },
     "additionalProperties": false,
@@ -2709,6 +3285,10 @@
       "type": "boolean",
       "title": "Archived"
      },
+     "tools_enabled": {
+      "type": "boolean",
+      "title": "Tools Enabled"
+     },
      "created_at": {
       "type": "string",
       "format": "date-time",
@@ -2729,6 +3309,7 @@
      "params",
      "pinned",
      "archived",
+     "tools_enabled",
      "created_at",
      "updated_at"
     ],
@@ -2808,11 +3389,31 @@
        }
       ],
       "title": "Archived"
+     },
+     "tools_enabled": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tools Enabled"
      }
     },
     "additionalProperties": false,
     "type": "object",
     "title": "ConversationUpdate"
+   },
+   "Decision": {
+    "type": "string",
+    "enum": [
+     "auto",
+     "confirm",
+     "deny"
+    ],
+    "title": "Decision"
    },
    "DeleteAllRequest": {
     "properties": {
@@ -3004,6 +3605,96 @@
      "query"
     ],
     "title": "DocumentSearchRequest"
+   },
+   "ExecutionOut": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Id"
+     },
+     "conversation_id": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "uuid"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Conversation Id"
+     },
+     "tool_name": {
+      "type": "string",
+      "title": "Tool Name"
+     },
+     "arguments": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Arguments"
+     },
+     "risk_level": {
+      "type": "string",
+      "title": "Risk Level"
+     },
+     "decision": {
+      "type": "string",
+      "title": "Decision"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "result_summary": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Result Summary"
+     },
+     "duration_ms": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Duration Ms"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Created At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "conversation_id",
+     "tool_name",
+     "arguments",
+     "risk_level",
+     "decision",
+     "status",
+     "result_summary",
+     "duration_ms",
+     "created_at"
+    ],
+    "title": "ExecutionOut"
    },
    "ExtractRequest": {
     "properties": {
@@ -3572,6 +4263,21 @@
       ],
       "title": "Context Sources"
      },
+     "tool_calls": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tool Calls"
+     },
      "attachments": {
       "items": {
        "$ref": "#/components/schemas/AttachmentOut"
@@ -3800,6 +4506,26 @@
     ],
     "title": "Page[MessageOut]"
    },
+   "PolicyUpdate": {
+    "properties": {
+     "decision": {
+      "type": "string",
+      "enum": [
+       "auto",
+       "confirm",
+       "deny",
+       "default"
+      ],
+      "title": "Decision"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+     "decision"
+    ],
+    "title": "PolicyUpdate"
+   },
    "RefreshRequest": {
     "properties": {
      "refresh_token": {
@@ -3850,6 +4576,97 @@
     ],
     "title": "RegisterRequest"
    },
+   "ReportOut": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Id"
+     },
+     "title": {
+      "type": "string",
+      "title": "Title"
+     },
+     "severity": {
+      "type": "string",
+      "title": "Severity"
+     },
+     "conversation_id": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "uuid"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Conversation Id"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Created At"
+     },
+     "content": {
+      "type": "string",
+      "title": "Content"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "title",
+     "severity",
+     "conversation_id",
+     "created_at",
+     "content"
+    ],
+    "title": "ReportOut"
+   },
+   "ReportSummary": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Id"
+     },
+     "title": {
+      "type": "string",
+      "title": "Title"
+     },
+     "severity": {
+      "type": "string",
+      "title": "Severity"
+     },
+     "conversation_id": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "uuid"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Conversation Id"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Created At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "title",
+     "severity",
+     "conversation_id",
+     "created_at"
+    ],
+    "title": "ReportSummary"
+   },
    "Role": {
     "type": "string",
     "enum": [
@@ -3857,6 +4674,119 @@
      "user"
     ],
     "title": "Role"
+   },
+   "ScriptCreate": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]{1,64}$",
+      "title": "Name"
+     },
+     "path": {
+      "type": "string",
+      "maxLength": 1000,
+      "minLength": 3,
+      "title": "Path"
+     },
+     "description": {
+      "type": "string",
+      "maxLength": 500,
+      "title": "Description",
+      "default": ""
+     },
+     "arg_pattern": {
+      "anyOf": [
+       {
+        "type": "string",
+        "maxLength": 200
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Arg Pattern"
+     },
+     "max_args": {
+      "type": "integer",
+      "maximum": 20.0,
+      "minimum": 0.0,
+      "title": "Max Args",
+      "default": 0
+     },
+     "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1.0,
+      "title": "Timeout Seconds",
+      "default": 60
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "required": [
+     "name",
+     "path"
+    ],
+    "title": "ScriptCreate"
+   },
+   "ScriptOut": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Id"
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "description": {
+      "type": "string",
+      "title": "Description"
+     },
+     "path": {
+      "type": "string",
+      "title": "Path"
+     },
+     "sha256": {
+      "type": "string",
+      "title": "Sha256"
+     },
+     "runner": {
+      "type": "string",
+      "title": "Runner"
+     },
+     "arg_pattern": {
+      "type": "string",
+      "title": "Arg Pattern"
+     },
+     "max_args": {
+      "type": "integer",
+      "title": "Max Args"
+     },
+     "timeout_seconds": {
+      "type": "integer",
+      "title": "Timeout Seconds"
+     },
+     "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "title": "Created At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "name",
+     "description",
+     "path",
+     "sha256",
+     "runner",
+     "arg_pattern",
+     "max_args",
+     "timeout_seconds",
+     "created_at"
+    ],
+    "title": "ScriptOut"
    },
    "SessionOut": {
     "properties": {
@@ -4186,6 +5116,69 @@
     ],
     "title": "TokenResponse"
    },
+   "ToolOut": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "description": {
+      "type": "string",
+      "title": "Description"
+     },
+     "risk": {
+      "type": "string",
+      "title": "Risk"
+     },
+     "profiles": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Profiles"
+     },
+     "decision": {
+      "$ref": "#/components/schemas/Decision"
+     },
+     "customized": {
+      "type": "boolean",
+      "title": "Customized"
+     },
+     "needs_roots": {
+      "type": "boolean",
+      "title": "Needs Roots"
+     }
+    },
+    "type": "object",
+    "required": [
+     "name",
+     "description",
+     "risk",
+     "profiles",
+     "decision",
+     "customized",
+     "needs_roots"
+    ],
+    "title": "ToolOut"
+   },
+   "TranscriptionOut": {
+    "properties": {
+     "text": {
+      "type": "string",
+      "title": "Text"
+     },
+     "duration_ms": {
+      "type": "integer",
+      "title": "Duration Ms"
+     }
+    },
+    "type": "object",
+    "required": [
+     "text",
+     "duration_ms"
+    ],
+    "title": "TranscriptionOut"
+   },
    "UploadResult": {
     "properties": {
      "document": {
@@ -4369,6 +5362,34 @@
      "type"
     ],
     "title": "ValidationError"
+   },
+   "VoiceStatusOut": {
+    "properties": {
+     "stt_available": {
+      "type": "boolean",
+      "title": "Stt Available"
+     },
+     "stt_model": {
+      "type": "string",
+      "title": "Stt Model"
+     },
+     "language": {
+      "type": "string",
+      "title": "Language"
+     },
+     "tts": {
+      "type": "string",
+      "title": "Tts",
+      "default": "browser"
+     }
+    },
+    "type": "object",
+    "required": [
+     "stt_available",
+     "stt_model",
+     "language"
+    ],
+    "title": "VoiceStatusOut"
    }
   }
  }

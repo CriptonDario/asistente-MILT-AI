@@ -20,6 +20,7 @@ from app.modules.chat.schemas import (
     WsChatRegenerate,
     WsChatSend,
     WsPing,
+    WsToolConfirm,
     client_message_adapter,
 )
 from app.modules.chat.service import ChatService, TurnRequest
@@ -126,6 +127,14 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 await sender.send({"type": "ready", "user_id": str(auth.user.id)})
                 continue
 
+            if isinstance(message, WsToolConfirm):
+                # Solo se resuelven confirmaciones pendientes del propio usuario.
+                if not state.confirmations.resolve(message.call_id, auth.user.id, message.approved):
+                    await sender.send(
+                        _error("not_found", "No hay ninguna confirmación pendiente con ese id.")
+                    )
+                continue
+
             if isinstance(message, WsChatCancel):
                 if not state.turns.cancel(message.request_id, auth.user.id):
                     await sender.send(
@@ -152,6 +161,7 @@ async def chat_websocket(websocket: WebSocket) -> None:
                 request_id=message.request_id,
                 user_id=auth.user.id,
                 user_name=auth.user.display_name,
+                user_role=auth.user.role,
                 conversation_id=message.conversation_id,
                 content=message.content if isinstance(message, WsChatSend) else None,
                 model=message.model,

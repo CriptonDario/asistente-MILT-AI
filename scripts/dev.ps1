@@ -59,7 +59,7 @@ if (-not $BackendOnly) {
 
 Push-Location $backend
 try {
-    & $uv sync
+    & $uv sync --extra voice
     & $uv run uvicorn app.main:app --host 127.0.0.1 --port $Port --reload
 } finally {
     Pop-Location

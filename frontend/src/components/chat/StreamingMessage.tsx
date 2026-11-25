@@ -5,6 +5,7 @@ import { Button } from "../ui/Button";
 import { AssistantShell } from "./MessageItem";
 import { Markdown } from "./Markdown";
 import { Sources } from "./Sources";
+import { ToolCalls } from "./ToolCalls";
 
 const ERROR_HINTS: Record<string, string> = {
   provider_unavailable: "El motor local (Ollama) no responde. Comprueba que está abierto.",
@@ -35,15 +36,22 @@ function Waiting({ since }: { since: number }) {
 interface StreamingMessageProps {
   stream: StreamState;
   onRetry: () => void;
+  onConfirmTool?: (callId: string, approved: boolean) => void;
   onDismiss: () => void;
 }
 
-export function StreamingMessage({ stream, onRetry, onDismiss }: StreamingMessageProps) {
+export function StreamingMessage({
+  stream,
+  onRetry,
+  onDismiss,
+  onConfirmTool,
+}: StreamingMessageProps) {
   const active = stream.status === "pending" || stream.status === "streaming";
 
   if (stream.status === "error") {
     return (
       <AssistantShell>
+        <ToolCalls tools={stream.tools} />
         {stream.text && <Markdown text={stream.text} />}
         <div
           role="alert"
@@ -69,13 +77,15 @@ export function StreamingMessage({ stream, onRetry, onDismiss }: StreamingMessag
 
   return (
     <AssistantShell active={active}>
+      <ToolCalls tools={stream.tools} onConfirm={onConfirmTool} />
       {stream.text ? (
         <div className="relative">
           <Markdown text={stream.text} />
           {active && <span className="stream-cursor" aria-hidden="true" />}
         </div>
       ) : (
-        active && <Waiting since={stream.startedAt} />
+        active &&
+        !stream.tools.some((t) => t.status === "awaiting") && <Waiting since={stream.startedAt} />
       )}
       <Sources sources={stream.sources} warnings={stream.warnings} />
     </AssistantShell>

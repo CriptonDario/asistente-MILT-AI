@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Theme } from "../types/api";
 
-export type Panel = "settings" | "memory" | "documents" | null;
+export type Panel = "settings" | "memory" | "documents" | "tools" | null;
 export type MemoryTab = "memories" | "suggestions";
 
 const THEME_KEY = "milt.theme";

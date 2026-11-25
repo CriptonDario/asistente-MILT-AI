@@ -1,4 +1,4 @@
-import { ArrowUp, FileText, FileUp, Mic, Paperclip, Square, X } from "lucide-react";
+import { ArrowUp, FileText, FileUp, Mic, MicOff, Paperclip, Square, X } from "lucide-react";
 import {
   type ChangeEvent,
   type FormEvent,
@@ -41,6 +41,103 @@ interface ComposerProps {
   documents?: DocumentInfo[];
   /** Sube un archivo y devuelve el documento creado. Si falta, no se ofrece subir. */
   onUpload?: (file: File) => Promise<DocumentInfo>;
+  /** Transcribe audio a texto (reconocimiento local). Si falta, el micrófono se desactiva. */
+  onTranscribe?: (audio: Blob) => Promise<string>;
+}
+
+const MAX_RECORDING_MS = 60_000;
+
+/** Botón de micrófono: graba, transcribe en el equipo y añade el texto al mensaje. */
+function VoiceButton({
+  onTranscribe,
+  disabled,
+  onText,
+  onError,
+}: {
+  onTranscribe?: (audio: Blob) => Promise<string>;
+  disabled: boolean;
+  onText: (text: string) => void;
+  onError: (message: string | null) => void;
+}) {
+  const [state, setState] = useState<"idle" | "recording" | "transcribing">("idle");
+  const recorder = useRef<MediaRecorder | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const supported =
+    typeof window !== "undefined" &&
+    typeof window.MediaRecorder !== "undefined" &&
+    Boolean(navigator.mediaDevices?.getUserMedia);
+
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+      recorder.current?.stream.getTracks().forEach((t) => t.stop());
+    },
+    [],
+  );
+
+  if (!onTranscribe || !supported) {
+    return (
+      <IconButton
+        label={onTranscribe ? "Tu navegador no permite grabar audio" : "Voz no disponible"}
+        disabled
+      >
+        <Mic className="size-4" />
+      </IconButton>
+    );
+  }
+
+  const start = async () => {
+    onError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const chunks: Blob[] = [];
+      const rec = new MediaRecorder(stream);
+      rec.ondataavailable = (e) => e.data.size > 0 && chunks.push(e.data);
+      rec.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        if (timer.current) clearTimeout(timer.current);
+        setState("transcribing");
+        try {
+          const text = (await onTranscribe(new Blob(chunks, { type: rec.mimeType }))).trim();
+          if (text) onText(text);
+          else onError("No se entendió nada. Prueba a hablar más cerca del micrófono.");
+        } catch (error) {
+          onError(error instanceof Error ? error.message : "No se pudo transcribir el audio.");
+        } finally {
+          setState("idle");
+        }
+      };
+      recorder.current = rec;
+      rec.start();
+      setState("recording");
+      timer.current = setTimeout(() => rec.state === "recording" && rec.stop(), MAX_RECORDING_MS);
+    } catch {
+      onError("No se pudo acceder al micrófono. Revisa los permisos del navegador.");
+      setState("idle");
+    }
+  };
+
+  const stop = () => {
+    if (recorder.current?.state === "recording") recorder.current.stop();
+  };
+
+  if (state === "transcribing") {
+    return (
+      <IconButton label="Transcribiendo…" disabled>
+        <Spinner className="size-4" />
+      </IconButton>
+    );
+  }
+  return (
+    <IconButton
+      label={state === "recording" ? "Detener y transcribir" : "Hablar"}
+      onClick={state === "recording" ? stop : () => void start()}
+      disabled={disabled && state !== "recording"}
+      className={state === "recording" ? "animate-pulse bg-danger/15 text-danger" : undefined}
+    >
+      {state === "recording" ? <MicOff className="size-4" /> : <Mic className="size-4" />}
+    </IconButton>
+  );
 }
 
 function AttachmentChip({ doc, onRemove }: { doc: DocumentInfo | undefined; onRemove: () => void }) {
@@ -78,6 +175,7 @@ export function Composer({
   autoFocus = true,
   documents = [],
   onUpload,
+  onTranscribe,
 }: ComposerProps) {
   const [text, setText] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
@@ -248,9 +346,12 @@ export function Composer({
             data-testid="file-input"
           />
         </div>
-        <IconButton label="Hablar (disponible en la Fase 5)" disabled>
-          <Mic className="size-4" />
-        </IconButton>
+        <VoiceButton
+          onTranscribe={onTranscribe}
+          disabled={disabled || streaming}
+          onText={(spoken) => setText((current) => (current ? `${current} ${spoken}` : spoken))}
+          onError={setUploadError}
+        />
         <span
           className={cn(
             "ml-auto px-2 text-xs tabular-nums",

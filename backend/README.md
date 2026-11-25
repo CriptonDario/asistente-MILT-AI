@@ -12,7 +12,7 @@ API FastAPI local-first: autenticación, conversaciones y chat con streaming sob
 
 ```powershell
 cd backend
-uv sync                                   # crea .venv con Python 3.12 e instala dependencias
+uv sync --extra voice                     # .venv con Python 3.12 (+ voz local opcional)
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 ```
 
@@ -66,3 +66,11 @@ app/
 - **RAG en el chat:** se adjuntan documentos a un mensaje y quedan disponibles para toda la conversación. Los pequeños se incluyen enteros; los grandes, por búsqueda semántica. El modelo recibe los fragmentos marcados como *datos, no instrucciones* y cita la fuente `[n]`.
 - **Presupuesto de contexto:** recuerdos ≤ 15 % y documentos ≤ 30 % de `num_ctx`.
 - **Sin Ollama** (o sin el modelo de embeddings), el chat sigue funcionando y avisa de que no pudo consultar la memoria.
+
+## Herramientas y voz (Fase 5)
+
+- **Herramientas**: se activan por conversación y se ofrecen según el perfil (General, Programación, Seguridad, Documentos). El modelo *propone* y la política *decide*: leer es automático; escribir, ejecutar y usar la red piden confirmación en la interfaz (WebSocket), y ejecutar y red nunca pueden ser automáticos.
+- **Archivos**: solo dentro de las carpetas autorizadas (panel Herramientas). Nunca la carpeta de Windows, los datos de MILT ni archivos de claves (`.env`, `.ssh`, `*.pem`…).
+- **Scripts**: solo los que un administrador autoriza (`.py`, `.ps1`, `.exe`, por hash SHA-256). Se ejecutan sin shell, con entorno mínimo, tiempo y memoria limitados (Job Object en Windows).
+- **Ciberseguridad (defensiva)**: análisis de logs, indicadores de compromiso, diagnóstico de la red **propia** y reportes.
+- **Voz**: transcripción local con faster-whisper (`uv sync --extra voice`; el modelo `base`, ~145 MB, se descarga la primera vez a `%APPDATA%\MILT\models`). La lectura en voz alta usa las voces de Windows desde el navegador.

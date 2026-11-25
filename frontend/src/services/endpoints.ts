@@ -14,7 +14,15 @@ import type {
   Message,
   MessagePage,
   ModelInfo,
+  Report,
+  ReportSummary,
+  ScriptCreate,
+  ScriptInfo,
+  ToolDecision,
+  ToolExecution,
+  ToolInfo,
   UploadResult,
+  VoiceStatus,
   SessionInfo,
   SettingsUpdate,
   SetupStatus,
@@ -114,6 +122,49 @@ export const documentsApi = {
     link.download = doc.filename;
     link.click();
     URL.revokeObjectURL(url);
+  },
+};
+
+// ------------------------------------------------------------------- herramientas
+export const toolsApi = {
+  list: () => api<ToolInfo[]>("/tools"),
+  setPolicy: (name: string, decision: ToolDecision | "default") =>
+    api<ToolInfo>(`/tools/policies/${name}`, { method: "PUT", body: { decision } }),
+  executions: (limit = 30) => api<ToolExecution[]>("/tools/executions", { query: { limit } }),
+  roots: () => api<{ roots: string[] }>("/settings/allowed-roots"),
+  setRoots: (roots: string[]) =>
+    api<{ roots: string[] }>("/settings/allowed-roots", { method: "PUT", body: { roots } }),
+  scripts: () => api<ScriptInfo[]>("/automation/scripts"),
+  registerScript: (body: ScriptCreate) =>
+    api<ScriptInfo>("/automation/scripts", { method: "POST", body }),
+  reauthorizeScript: (id: string) =>
+    api<ScriptInfo>(`/automation/scripts/${id}/reauthorize`, { method: "POST" }),
+  deleteScript: (id: string) => api<void>(`/automation/scripts/${id}`, { method: "DELETE" }),
+  reports: () => api<ReportSummary[]>("/security/reports"),
+  report: (id: string) => api<Report>(`/security/reports/${id}`),
+  deleteReport: (id: string) => api<void>(`/security/reports/${id}`, { method: "DELETE" }),
+  downloadReport: async (report: ReportSummary) => {
+    const text = await api<string>(`/security/reports/${report.id}/markdown`);
+    const url = URL.createObjectURL(new Blob([text], { type: "text/markdown;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${report.title.slice(0, 60)}.md`;
+    link.click();
+    URL.revokeObjectURL(url);
+  },
+};
+
+// ------------------------------------------------------------------- voz
+export const voiceApi = {
+  status: () => api<VoiceStatus>("/voice/status"),
+  transcribe: (audio: Blob) => {
+    const form = new FormData();
+    const ext = audio.type.includes("ogg") ? "ogg" : audio.type.includes("mp4") ? "mp4" : "webm";
+    form.append("audio", audio, `voz.${ext}`);
+    return api<{ text: string; duration_ms: number }>("/voice/transcribe", {
+      method: "POST",
+      body: form,
+    });
   },
 };
 

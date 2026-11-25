@@ -8,6 +8,7 @@ import type { Theme } from "../../types/api";
 import { useState } from "react";
 import { ModelSelector } from "../chat/ModelSelector";
 import { IconButton } from "../ui/Button";
+import { ToolsControl } from "./ToolsControl";
 
 const NEXT_THEME: Record<Theme, Theme> = { dark: "light", light: "system", system: "dark" };
 const THEME_LABEL: Record<Theme, string> = {
@@ -127,6 +128,7 @@ export function Header({ conversationId, title, model, defaultModel, onModelChan
         </IconButton>
       )}
       <ModelSelector value={model} fallback={defaultModel} onChange={onModelChange} />
+      {conversationId && <ToolsControl conversationId={conversationId} />}
       <h1 className="hidden min-w-0 flex-1 truncate text-center text-sm text-muted lg:block">
         {title}
       </h1>

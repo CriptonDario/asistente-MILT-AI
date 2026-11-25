@@ -75,6 +75,7 @@ Cliente → servidor:
 { "type": "chat.regenerate", "request_id": "uuid", "conversation_id": "uuid", "model"?: "...", "params"?: {} }
 { "type": "chat.cancel", "request_id": "uuid" }
 { "type": "auth", "token": "..." }   // renovar el token sin reconectar
+{ "type": "tool.confirm", "call_id": "...", "approved": true }   // respuesta a tool.confirm_request
 { "type": "tool.confirm", "call_id": "uuid", "approved": true }
 { "type": "ping" }
 ```
@@ -87,9 +88,9 @@ Servidor → cliente:
 { "type": "chat.delta",    "request_id", "text": "..." }
 { "type": "chat.thinking", "request_id", "text": "..." }   // solo si think=true
 { "type": "chat.context",  "request_id", "sources": [{ "kind": "memory|document", "id", "title", "ref"?, "document_id"?, "location"?, "score" }], "warnings": ["..."] }
-{ "type": "tool.call",     "request_id", "call_id", "tool", "arguments" }
+{ "type": "tool.call",     "request_id", "call_id", "tool", "arguments", "risk", "summary" }
 { "type": "tool.confirm_request", "request_id", "call_id", "tool", "summary", "risk_level", "expires_in": 120 }
-{ "type": "tool.result",   "request_id", "call_id", "status": "ok|error|denied" }
+{ "type": "tool.result",   "request_id", "call_id", "status": "ok|error|denied", "summary" }
 { "type": "chat.done",     "request_id", "message_id", "usage": { "prompt_tokens", "completion_tokens", "latency_ms", "first_token_ms" } }
 { "type": "chat.error",    "request_id", "code": "provider_unavailable|model_not_found|context_overflow|cancelled|not_found|validation_error|busy", "detail" }
 { "type": "error",         "code": "unauthorized|token_expired|invalid_message|frame_too_large|busy|not_found", "detail", "request_id"? }
@@ -132,31 +133,33 @@ Servidor → cliente:
 
 | Método | Ruta | Permiso | Descripción |
 |--------|------|---------|-------------|
-| GET | `/tools` | 👤 | Catálogo: nombre, descripción, esquema y `risk_level` |
+| GET | `/tools` | 👤 | Catálogo: nombre, descripción, riesgo, perfiles y decisión efectiva para el usuario |
 | GET | `/tools/policies` | 👤 | Política efectiva (auto / confirmar / denegada) |
-| PUT | `/tools/policies/{tool}` | 👤🏠 | Cambiar la política. No se puede pasar de "confirmar" a "auto" para el riesgo `execute` |
+| PUT | `/tools/policies/{tool}` | 👤🏠 | `{decision: auto|confirm|deny|default}`. Ejecutar (`script_run`) y red (`net_diagnose`) nunca pueden ser automáticas |
 | GET | `/tools/executions` | 👤 | Historial de ejecuciones |
+| GET / PUT | `/settings/allowed-roots` | 👤 / 🛡️🏠 | Carpetas a las que pueden acceder las herramientas (validadas). Solo un administrador las cambia |
 | GET | `/automation/scripts` | 👤🏠 | Scripts de la lista blanca |
-| POST | `/automation/scripts` | 🛡️🏠 | Registrar un script (ruta, hash SHA-256 y argumentos permitidos) |
-| GET/POST | `/automation/workflows` | 👤 | Flujos de trabajo |
-| POST | `/automation/workflows/{id}/run` | 👤 | Ejecutar un flujo (con confirmaciones) |
+| POST | `/automation/scripts` | 🛡️🏠 | Registrar un script `.py/.ps1/.exe` (ruta, hash SHA-256, patrón de argumentos, máx. argumentos, tiempo) |
+| POST | `/automation/scripts/{id}/reauthorize` | 🛡️🏠 | Aceptar la versión actual tras revisarla (recalcula el hash) |
+| DELETE | `/automation/scripts/{id}` | 🛡️🏠 | Quitar autorización |
+| — | *(flujos de trabajo)* | — | Pospuesto: el bucle del agente encadena herramientas con confirmación |
 
 ## Ciberseguridad
 
 | Método | Ruta | Permiso | Descripción |
 |--------|------|---------|-------------|
-| POST | `/security/logs/analyze` | 👤 | Subida o ruta autorizada → hallazgos |
-| POST | `/security/network/diagnose` | 👤🏠 | Diagnóstico **del propio equipo y su red local** |
-| POST | `/security/ioc/match` | 👤 | Coincidencia de IoC (hash, IP, dominio) contra datos locales |
-| GET | `/security/reports` · `/security/reports/{id}` | 👤 | Reportes (Markdown o PDF) |
+| — | *(análisis)* | 👤 | Se hacen como herramientas del agente (perfil Seguridad): `logs_analyze`, `ioc_match`, `net_diagnose` (solo red propia), `security_report` |
+| GET | `/security/reports` · `/security/reports/{id}` | 👤 | Reportes guardados |
+| GET | `/security/reports/{id}/markdown` | 👤 | Descarga en Markdown |
+| DELETE | `/security/reports/{id}` | 👤 | Eliminar |
 
 ## Voz
 
 | Método | Ruta | Permiso | Descripción |
 |--------|------|---------|-------------|
-| POST | `/voice/transcribe` | 👤 | Audio (webm/wav) → texto |
-| POST | `/voice/synthesize` | 👤 | `{text, voice}` → `audio/wav` |
-| GET | `/voice/voices` | 👤 | Voces TTS disponibles |
+| POST | `/voice/transcribe` | 👤 | Audio (webm/ogg/wav/mp4/mp3, máx. 10 MB y `MILT_VOICE_MAX_SECONDS`=120 s) → texto |
+| GET | `/voice/status` | 👤 | `{stt_available, stt_model, language, tts:"browser"}` |
+| — | *(síntesis)* | — | En el navegador con las voces del sistema operativo (locales) |
 | WS | `/ws/voice` | 👤 | (Fase futura) streaming de audio para manos libres |
 
 ## Ajustes
@@ -164,7 +167,7 @@ Servidor → cliente:
 | Método | Ruta | Permiso |
 |--------|------|---------|
 | GET / PATCH | `/settings` | 👤 |
-| GET / PUT | `/settings/allowed-roots` | 👤🏠 |
+| GET / PUT | `/settings/allowed-roots` | 👤 / 🛡️🏠 |
 
 ## Sincronización y acceso remoto
 

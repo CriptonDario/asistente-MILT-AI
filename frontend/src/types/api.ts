@@ -33,6 +33,25 @@ export type DocumentInfo = Schemas["DocumentOut"];
 export type UploadResult = Schemas["UploadResult"];
 export type ContextSource = Schemas["ContextSource"];
 export type Attachment = Schemas["AttachmentOut"];
+export type ToolInfo = Schemas["ToolOut"];
+export type ToolDecision = ToolInfo["decision"];
+export type ToolExecution = Schemas["ExecutionOut"];
+export type ScriptInfo = Schemas["ScriptOut"];
+export type ScriptCreate = Partial<Schemas["ScriptCreate"]> & { name: string; path: string };
+export type ReportSummary = Schemas["ReportSummary"];
+export type Report = Schemas["ReportOut"];
+export type VoiceStatus = Schemas["VoiceStatusOut"];
+export type AgentProfile = NonNullable<ConversationUpdate["agent_profile"]>;
+
+/** Herramienta usada en una respuesta (tal como se guarda en el mensaje). */
+export interface ToolCallLog {
+  call_id: string;
+  tool: string;
+  risk: string;
+  status: "ok" | "error" | "denied";
+  decision: string;
+  summary: string;
+}
 
 /** Cuerpo de error RFC 9457 que devuelve el backend. */
 export interface ProblemDetails {
@@ -66,7 +85,8 @@ export type ClientEvent =
       model?: string;
       params?: GenerationParams;
     }
-  | { type: "chat.cancel"; request_id: string };
+  | { type: "chat.cancel"; request_id: string }
+  | { type: "tool.confirm"; call_id: string; approved: boolean };
 
 export interface ChatUsage {
   prompt_tokens: number;
@@ -92,6 +112,32 @@ export type ServerEvent =
       request_id: string;
       sources: ContextSource[];
       warnings: string[];
+    }
+  | {
+      type: "tool.call";
+      request_id: string;
+      call_id: string;
+      tool: string;
+      arguments: Record<string, unknown>;
+      risk: string;
+      summary: string;
+    }
+  | {
+      type: "tool.confirm_request";
+      request_id: string;
+      call_id: string;
+      tool: string;
+      summary: string;
+      arguments: Record<string, unknown>;
+      risk: string;
+      expires_in: number;
+    }
+  | {
+      type: "tool.result";
+      request_id: string;
+      call_id: string;
+      status: "ok" | "error" | "denied";
+      summary: string;
     }
   | { type: "chat.delta"; request_id: string; text: string }
   | { type: "chat.thinking"; request_id: string; text: string }

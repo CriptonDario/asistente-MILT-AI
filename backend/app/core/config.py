@@ -91,6 +91,26 @@ class Settings(BaseSettings):
     #: Total de fragmentos por usuario. Qdrant embebido guarda todo en RAM (~3 KB/vector).
     max_chunks_per_user: int = Field(default=20_000, ge=1)
     max_documents_per_user: int = Field(default=200, ge=1)
+    # --- Herramientas y automatización ------------------------------------------
+    #: Máximo de llamadas a herramientas por turno y presupuesto total de tiempo.
+    agent_max_tool_calls: int = Field(default=6, ge=1, le=20)
+    agent_time_budget_seconds: float = Field(default=900.0, gt=0)
+    tool_timeout_seconds: float = Field(default=60.0, gt=0)
+    tool_confirm_timeout_seconds: float = Field(default=120.0, gt=0)
+    #: Límite de memoria (MB) y tiempo (s) por defecto para los scripts autorizados.
+    script_memory_mb: int = Field(default=512, ge=32)
+    script_max_timeout_seconds: int = Field(default=300, ge=1)
+    script_python: str = "python"
+
+    # --- Voz -----------------------------------------------------------------------
+    #: Modelo de faster-whisper (tiny, base, small...). "base" equilibra calidad y RAM.
+    voice_stt_model: str = "base"
+    voice_language: str = "es"
+    voice_max_upload_bytes: int = Field(default=10 * 1024 * 1024, ge=1024)
+    #: Duración máxima del audio decodificado. 10 MB de Opus pueden ser horas de audio:
+    #: sin este tope, decodificarlo agotaría la RAM y la CPU.
+    voice_max_seconds: int = Field(default=120, ge=5, le=1800)
+
     #: Parseo en un subproceso con límite de tiempo (aísla archivos maliciosos).
     parse_isolated: bool = True
     parse_timeout_seconds: float = Field(default=120.0, gt=0)

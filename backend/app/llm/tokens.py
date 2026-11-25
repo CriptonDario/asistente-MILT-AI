@@ -6,6 +6,7 @@ quedarse corto y evitar que Ollama recorte el contexto silenciosamente.
 
 from __future__ import annotations
 
+import json
 import math
 
 from app.llm.base import ChatMessage
@@ -19,4 +20,8 @@ def estimate_tokens(text: str) -> int:
 
 
 def estimate_message_tokens(message: ChatMessage) -> int:
-    return estimate_tokens(message.content) + MESSAGE_OVERHEAD_TOKENS
+    tokens = estimate_tokens(message.content) + MESSAGE_OVERHEAD_TOKENS
+    if message.tool_calls:
+        # Las llamadas a herramientas también ocupan contexto (nombre y argumentos en JSON).
+        tokens += estimate_tokens(json.dumps(message.tool_calls, ensure_ascii=False))
+    return tokens

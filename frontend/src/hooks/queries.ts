@@ -6,6 +6,8 @@ import {
   documentsApi,
   memoriesApi,
   modelsApi,
+  toolsApi,
+  voiceApi,
   settingsApi,
   systemApi,
 } from "../services/endpoints";
@@ -173,5 +175,35 @@ export function useReindexDocument() {
   return useMutation({
     mutationFn: (id: string) => documentsApi.reindex(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.documents }),
+  });
+}
+
+// ------------------------------------------------------------------ herramientas
+export function useTools(enabled = true) {
+  return useQuery({ queryKey: queryKeys.tools, queryFn: toolsApi.list, enabled });
+}
+
+export function useToolRoots() {
+  return useQuery({ queryKey: queryKeys.toolRoots, queryFn: toolsApi.roots });
+}
+
+export function useToolExecutions() {
+  return useQuery({ queryKey: queryKeys.toolExecutions, queryFn: () => toolsApi.executions(30) });
+}
+
+export function useScripts() {
+  return useQuery({ queryKey: queryKeys.scripts, queryFn: toolsApi.scripts });
+}
+
+export function useReports() {
+  return useQuery({ queryKey: queryKeys.reports, queryFn: toolsApi.reports });
+}
+
+export function useVoiceStatus() {
+  return useQuery({
+    queryKey: queryKeys.voice,
+    queryFn: voiceApi.status,
+    staleTime: 5 * 60_000,
+    retry: false,
   });
 }

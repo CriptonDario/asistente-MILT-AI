@@ -48,6 +48,8 @@ class ChatMessage(BaseModel):
     role: Role
     content: str
     tool_calls: list[dict[str, Any]] | None = None
+    #: En mensajes ``role="tool"``: herramienta cuyo resultado se devuelve.
+    tool_name: str | None = None
 
 
 class GenerationParams(BaseModel):

@@ -1,4 +1,4 @@
-import { Brain, FileText, PanelLeftClose, Search, Settings, SquarePen } from "lucide-react";
+import { Brain, FileText, PanelLeftClose, Search, Settings, SquarePen, Wrench } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { useConversationList } from "../../hooks/queries";
@@ -161,6 +161,9 @@ export function Sidebar() {
           <p className="truncate text-sm font-medium">{user?.display_name}</p>
           <p className="truncate text-xs text-muted">{user?.email}</p>
         </div>
+        <IconButton label="Herramientas" onClick={() => openPanel("tools")}>
+          <Wrench className="size-4" />
+        </IconButton>
         <IconButton label="Documentos" onClick={() => openPanel("documents")}>
           <FileText className="size-4" />
         </IconButton>

@@ -3,6 +3,7 @@
 from app.db.base import Base
 from app.modules.audit.models import AuditLog
 from app.modules.auth.models import Device, RefreshToken
+from app.modules.automation.models import AutomationScript, SecurityReport, ToolExecution
 from app.modules.conversations.models import Conversation, Message
 from app.modules.documents.models import Document, DocumentChunk, MessageAttachment
 from app.modules.memory.models import Memory
@@ -11,6 +12,7 @@ from app.modules.users.models import User
 
 __all__ = [
     "AuditLog",
+    "AutomationScript",
     "Base",
     "Conversation",
     "Device",
@@ -20,6 +22,8 @@ __all__ = [
     "Message",
     "MessageAttachment",
     "RefreshToken",
+    "SecurityReport",
+    "ToolExecution",
     "User",
     "UserSettings",
 ]

@@ -22,6 +22,10 @@ class UserSettings(TimestampMixin, Base):
     language: Mapped[str] = mapped_column(String(16), default="es", nullable=False)
     default_model: Mapped[str | None] = mapped_column(String(200), nullable=True)
     generation_defaults: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
+    #: Carpetas a las que pueden acceder las herramientas (rutas absolutas validadas).
+    allowed_roots: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
+    #: Política por herramienta: {"file_write": "deny", ...}
+    tool_policies: Mapped[dict[str, str] | None] = mapped_column(JSONType, nullable=True)
     #: Usar los recuerdos aprobados en las respuestas.
     memory_enabled: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default=true(), nullable=False

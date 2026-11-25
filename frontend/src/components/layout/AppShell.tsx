@@ -6,6 +6,7 @@ import { useUi } from "../../stores/ui";
 import { DocumentsPanel } from "../documents/DocumentsPanel";
 import { MemoryPanel } from "../memory/MemoryPanel";
 import { SettingsPanel } from "../settings/SettingsPanel";
+import { ToolsPanel } from "../tools/ToolsPanel";
 import { Sidebar } from "./Sidebar";
 
 export function AppShell() {
@@ -62,6 +63,7 @@ export function AppShell() {
       {panel === "settings" && <SettingsPanel />}
       {panel === "memory" && <MemoryPanel />}
       {panel === "documents" && <DocumentsPanel />}
+      {panel === "tools" && <ToolsPanel />}
     </div>
   );
 }

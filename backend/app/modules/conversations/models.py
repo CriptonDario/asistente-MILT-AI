@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, Uuid
+from sqlalchemy import Boolean, ForeignKey, Index, Integer, String, Text, Uuid, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, SyncMixin, TimestampMixin, UUIDPrimaryKeyMixin
@@ -26,6 +26,10 @@ class Conversation(UUIDPrimaryKeyMixin, TimestampMixin, SyncMixin, Base):
     pinned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     sync_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    #: Ofrecer herramientas al modelo en esta conversación (según su perfil de agente).
+    tools_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
 
 
 class Message(UUIDPrimaryKeyMixin, TimestampMixin, SyncMixin, Base):
